@@ -1909,6 +1909,8 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
     let yearsTotal = 0;
     let timeInDays = 0;
     let totalDays = 0;
+    let tempoAtualCmcDias = 0;
+    let tempoAtualTotalContribDias = 0;
     
     if (sim.ingressoCmc) {
       const activeRule = regrasResults.find((r: any) => r.isVantajosa);
@@ -1927,6 +1929,13 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
       const baseExcedente = 20;
       perc = 0.60 + (yearsTotal > baseExcedente ? (Math.floor(yearsTotal) - baseExcedente) * 0.02 : 0);
       perc = Math.min(Math.max(perc, 0.60), 1.0);
+
+      // Tempo Atual na CMC (computado rigorosamente até a data de emissão/hoje, NUNCA a data futura de projeção)
+      const todayNow = new Date();
+      const dataEstatutarioStr = sim.ingressoCargoAtual || sim.ingressoCmc || '';
+      const dateInicioEstatutarioObj = dataEstatutarioStr ? new Date(dataEstatutarioStr + 'T00:00:00') : adm;
+      tempoAtualCmcDias = Math.max(0, Math.floor((todayNow.getTime() - dateInicioEstatutarioObj.getTime()) / (24 * 3600 * 1000)));
+      tempoAtualTotalContribDias = tempoAtualCmcDias + calculatedDiasINSS + calculatedDiasSP - (sim.diasAfastamento || 0);
     }
 
     const fatoresText = (sim.congelada && sim.fatoresCongeladosText !== undefined)
@@ -2748,6 +2757,8 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
       calculatedDiasSP,
       timeInDays,
       totalDays,
+      tempoAtualCmcDias,
+      tempoAtualTotalContribDias,
       regrasResults,
       proventosResults: { 
         average: mediaSalarialGeral, 
@@ -2782,6 +2793,8 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
   const calculatedDiasSP = resultadosAtuais.calculatedDiasSP;
   const timeInDays = resultadosAtuais.timeInDays || 0;
   const totalDays = resultadosAtuais.totalDays || 0;
+  const tempoAtualCmcDias = resultadosAtuais.tempoAtualCmcDias || 0;
+  const tempoAtualTotalContribDias = resultadosAtuais.tempoAtualTotalContribDias || 0;
 
   const simFiltrado = React.useMemo(() => {
     if (temSimulado && cenarioAtivo === 'sem_simulado') {
@@ -2891,11 +2904,11 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block">Tempo na Câmara (CMC)</span>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block">Tempo Atual na Câmara (CMC)</span>
                 <strong className="text-sm text-slate-900 block font-mono font-bold">
-                  {formatarTempo(Math.max(0, timeInDays))}
+                  {formatarTempo(Math.max(0, tempoAtualCmcDias))}
                 </strong>
-                <span className="text-[11px] text-gray-500 block">Tempo acumulado em exercício efetivo na Câmara Municipal de Curitiba, desde a data de admissão.</span>
+                <span className="text-[11px] text-gray-500 block">Tempo acumulado em exercício na CMC apurado até a data atual ({new Date().toLocaleDateString('pt-BR')}).</span>
               </div>
               <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1">
                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block">Tempo Público Averbado (SP)</span>
@@ -2917,11 +2930,11 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
                 </div>
               ) : null}
               <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1 sm:col-span-2 lg:col-span-3 xl:col-span-1">
-                <span className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wide block">Tempo Total de Contribuição Consolidado</span>
+                <span className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wide block">Tempo Total Atual de Contribuição</span>
                 <strong className="text-sm text-[#004b8d] block font-mono font-bold">
-                  {formatarTempo(Math.max(0, totalDays - (sim.diasAfastamento || 0)))}
+                  {formatarTempo(Math.max(0, tempoAtualTotalContribDias))}
                 </strong>
-                <span className="text-[11px] text-gray-500 block">Saldo líquido final de todos os tempos computados para fins de aposentadoria (CMC + Averbados - Deduções).</span>
+                <span className="text-[11px] text-gray-500 block">Saldo líquido final computado na data de emissão/hoje (CMC + Averbados - Deduções).</span>
               </div>
             </div>
           </div>
@@ -3693,14 +3706,14 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
               </div>
             </div>
 
-            {/* Resumo da Grade de Tempo Apurada */}
+            {/* Resumo da Grade de Tempo Apurada (Tempo Atual na Data de Emissão) */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
-                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Tempo Estatutário CMC (Linha 1)</span>
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Tempo Estatutário CMC (Data Atual)</span>
                 <strong className="text-sm text-gray-900 block font-mono">
-                  {formatarTempo(Math.max(0, timeInDays))}
+                  {formatarTempo(Math.max(0, tempoAtualCmcDias))}
                 </strong>
-                <span className="text-[10px] text-gray-500 block">Vínculo efetivo no cargo</span>
+                <span className="text-[10px] text-gray-500 block">Tempo apurado até a data de emissão ({new Date().toLocaleDateString('pt-BR')})</span>
               </div>
 
               <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
@@ -3712,11 +3725,11 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
               </div>
 
               <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
-                <span className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wide block">Tempo Total Geral Contribuição</span>
+                <span className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wide block">Tempo Total Atual de Contribuição</span>
                 <strong className="text-sm text-[#004b8d] block font-mono font-bold">
-                  {formatarTempo(Math.max(0, totalDays - (sim.diasAfastamento || 0)))}
+                  {formatarTempo(Math.max(0, tempoAtualTotalContribDias))}
                 </strong>
-                <span className="text-[10px] text-gray-500 block">CMC + Averbados - Deduções</span>
+                <span className="text-[10px] text-gray-500 block">CMC + Averbados - Deduções (hoje)</span>
               </div>
             </div>
 

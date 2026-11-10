@@ -16,12 +16,25 @@ const formatBR = (dateStr?: string) => {
 
 const parseDate = (dateStr?: string): Date | null => {
   if (!dateStr) return null;
-  const d = new Date(dateStr);
+  if (dateStr.includes('/')) {
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const d = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const y = parseInt(parts[2], 10);
+      if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+        return new Date(y, m, d);
+      }
+    }
+  }
+  const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00`);
   return isNaN(d.getTime()) ? null : d;
 };
 
 /**
  * Constrói o objeto completo de CertidaoData a partir de uma Simulação Unificada
+ * IMPORTANTE: Para certidões, o tempo computado é SEMPRE o tempo decorrido ATUAL 
+ * até a data de emissão do documento, e NÃO a data de projeção de aposentadoria futura.
  */
 export function construirCertidaoAPartirDeSimulacao(
   sim: UnifiedSimulation, 
@@ -34,32 +47,41 @@ export function construirCertidaoAPartirDeSimulacao(
 ): CertidaoData {
   const tipo = options?.tipo || 'simulacao';
   const tipoCertidao = options?.tipoCertidao || 'aposentadoria';
-  const today = new Date();
+  
+  // Data de referência de corte da certidão: a data de emissão do documento (hoje ou personalizada)
+  const dataReferenciaEmissao = parseDate(options?.dataCertidaoPersonalizada) || new Date();
   const emissaoStr = options?.dataCertidaoPersonalizada || 
-    `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
-  const emissaoExtenso = `${today.getDate()} de ${today.toLocaleDateString('pt-BR', { month: 'long' })} de ${today.getFullYear()}`;
+    `${String(dataReferenciaEmissao.getDate()).padStart(2, '0')}/${String(dataReferenciaEmissao.getMonth() + 1).padStart(2, '0')}/${dataReferenciaEmissao.getFullYear()}`;
+  const emissaoExtenso = `${dataReferenciaEmissao.getDate()} de ${dataReferenciaEmissao.toLocaleDateString('pt-BR', { month: 'long' })} de ${dataReferenciaEmissao.getFullYear()}`;
 
-  // 1. Idade hoje e em 31/12/2021
+  // 1. Idade na data de emissão e em 31/12/2021
   let idadeHoje = 60;
   let idade31Dez2021 = 55;
   if (sim.dataNascimento) {
     const bDate = parseDate(sim.dataNascimento);
     if (bDate) {
-      idadeHoje = Math.floor((today.getTime() - bDate.getTime()) / (365.25 * 24 * 3600 * 1000));
+      idadeHoje = Math.floor((dataReferenciaEmissao.getTime() - bDate.getTime()) / (365.25 * 24 * 3600 * 1000));
       const date2021 = new Date(2021, 11, 31);
       idade31Dez2021 = Math.floor((date2021.getTime() - bDate.getTime()) / (365.25 * 24 * 3600 * 1000));
     }
   }
 
-  // 2. Tempo Estatutário na CMC (de admissão estatutária até a data de emissão)
+  // 2. Tempo Estatutário na CMC (de admissão na CMC / cargo até a data de emissão da certidão)
   const dataEstatutario = sim.ingressoCargoAtual || sim.ingressoCmc || '1993-10-02';
   const dateInicioEstatutario = parseDate(dataEstatutario) || new Date(1993, 9, 2);
-  const diasCMC = Math.max(0, Math.floor((today.getTime() - dateInicioEstatutario.getTime()) / (24 * 3600 * 1000)));
+  const diasCMC = Math.max(0, Math.floor((dataReferenciaEmissao.getTime() - dateInicioEstatutario.getTime()) / (24 * 3600 * 1000)));
   const anosCMC = Math.floor(diasCMC / 365);
   const remDiasCMC = diasCMC % 365;
   const mesesCMC = Math.floor(remDiasCMC / 30);
   const diasRestCMC = remDiasCMC % 30;
   const periodoCMC = `${formatBR(dataEstatutario)} a ${emissaoStr}`;
+
+  // Marcos temporais dinâmicos (data de emissão vs 31/12/2021)
+  const date31Dez2021 = new Date(2021, 11, 31);
+  const diasAte31Dez2021 = (dateInicioEstatutario && dateInicioEstatutario <= date31Dez2021)
+    ? Math.max(0, Math.floor((date31Dez2021.getTime() - dateInicioEstatutario.getTime()) / (24 * 3600 * 1000)))
+    : 0;
+  const diferencaDias = Math.max(0, diasCMC - diasAte31Dez2021);
 
   // 3. Tempo Fícto (licenças-prêmio incorporadas – CMC)
   let diasFicto = 0;
@@ -226,8 +248,8 @@ export function construirCertidaoAPartirDeSimulacao(
     },
     marcos: {
       diasAteEmissao: diasCMC,
-      diasAte31Dez2021: Math.max(0, diasCMC - 1756),
-      diferencaDias: 1756
+      diasAte31Dez2021: diasAte31Dez2021,
+      diferencaDias: diferencaDias
     },
     gradeTempo: {
       tempoEstatutarioCMC: {
@@ -322,7 +344,7 @@ export function construirCertidaoAPartirDeSimulacao(
       recebeAbono: false,
       dataAbono: '',
       idadeEm31Dez2021: idade31Dez2021,
-      tempoEm31Dez2021Anos: Math.max(0, anosGeral - 4)
+      tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
     },
     lavratura: {
       cidade: 'Curitiba',

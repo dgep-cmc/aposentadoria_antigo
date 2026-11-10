@@ -356,7 +356,18 @@ export default function GeradorCertidao() {
 
     const parseDate = (dateStr?: string): Date | null => {
       if (!dateStr) return null;
-      const d = new Date(dateStr);
+      if (dateStr.includes('/')) {
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+          const d = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10) - 1;
+          const y = parseInt(parts[2], 10);
+          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+            return new Date(y, m, d);
+          }
+        }
+      }
+      const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00`);
       return isNaN(d.getTime()) ? null : d;
     };
 
@@ -385,6 +396,13 @@ export default function GeradorCertidao() {
     const mesesCMC = Math.floor(remDiasCMC / 30);
     const diasRestCMC = remDiasCMC % 30;
     const periodoCMC = `${formatBR(dataEstatutario)} a ${emissaoStr}`;
+
+    // Marcos temporais dinâmicos (data de emissão vs 31/12/2021)
+    const date31Dez2021 = new Date(2021, 11, 31);
+    const diasAte31Dez2021 = (dateInicioEstatutario && dateInicioEstatutario <= date31Dez2021)
+      ? Math.max(0, Math.floor((date31Dez2021.getTime() - dateInicioEstatutario.getTime()) / (24 * 3600 * 1000)))
+      : 0;
+    const diferencaDias = Math.max(0, diasCMC - diasAte31Dez2021);
 
     // 3. Tempo Fícto (licenças-prêmio incorporadas – CMC)
     let diasFicto = 0;
@@ -547,8 +565,8 @@ export default function GeradorCertidao() {
       },
       marcos: {
         diasAteEmissao: diasCMC,
-        diasAte31Dez2021: Math.max(0, diasCMC - 1756),
-        diferencaDias: 1756
+        diasAte31Dez2021: diasAte31Dez2021,
+        diferencaDias: diferencaDias
       },
       gradeTempo: {
         tempoEstatutarioCMC: {
