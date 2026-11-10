@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getSavedSimulations, deleteSimulation, saveSimulation, UnifiedSimulation } from '../utils/simulationsStore';
-import { FileText, Trash2, Calendar, User, Briefcase, PlaySquare, ArrowUpDown, ChevronDown, ChevronUp, AlertTriangle, Copy } from 'lucide-react';
+import { FileText, Trash2, Calendar, User, Briefcase, PlaySquare, ArrowUpDown, ChevronDown, ChevronUp, AlertTriangle, Copy, FileCheck } from 'lucide-react';
 
 interface SimulacoesSalvasProps {
   onNavigate?: (tab: string) => void;
@@ -51,6 +51,13 @@ export default function SimulacoesSalvas({ onNavigate }: SimulacoesSalvasProps) 
       onNavigate('simulacao_completa');
     } else {
       alert("Simulação carregada! Navegue até a tela 'Fluxo Combinado de Simulação' para continuar.");
+    }
+  };
+
+  const handleGerarCertidao = (sim: UnifiedSimulation) => {
+    localStorage.setItem('dgep_unified_draft', JSON.stringify(sim));
+    if (onNavigate) {
+      onNavigate('gerador_certidao');
     }
   };
 
@@ -171,6 +178,13 @@ export default function SimulacoesSalvas({ onNavigate }: SimulacoesSalvasProps) 
                             title="Carregar Simulação"
                           >
                             <PlaySquare size={14} /> Carregar
+                          </button>
+                          <button 
+                            onClick={() => handleGerarCertidao(sim)}
+                            className="inline-flex items-center gap-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold px-3 py-1.5 text-xs rounded-lg transition-all border border-teal-200"
+                            title="Gerar Certidão DGEP / Remessa ao IPMC"
+                          >
+                            <FileCheck size={14} /> Certidão / IPMC
                           </button>
                           <button 
                             onClick={() => handleCopy(sim)}

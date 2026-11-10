@@ -2,6 +2,8 @@ export interface UnifiedSimulation {
   id: string; // Unique identifier (e.g. UUID or timestamp)
   nome: string;
   matricula: string;
+  rg?: string;
+  cpf?: string;
   sexo: 'M' | 'F' | '';
   dataNascimento: string; // YYYY-MM-DD
   
@@ -12,6 +14,9 @@ export interface UnifiedSimulation {
   selectedCareer: string; 
   careerLevel: 'M' | 'S'; // Nível Médio ou Superior (para proventos)
   selectedLevel: string; // Faixa atual (e.g. 'I', 'II', 'VI')
+  padrao?: string; // Ex: '306', '305'
+  referencia?: string; // Ex: 'XXXVI', 'I'
+  registroTribunalContas?: string;
   
   // Adicionais e FGs
   lastAtsConcession: string; // YYYY-MM-DD

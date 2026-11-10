@@ -6,7 +6,8 @@ import {
   UserCheck, 
   CalendarDays,
   ArrowRight,
-  Sparkles
+  Sparkles,
+  FileCheck
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -164,6 +165,34 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
             </div>
             <div className="flex items-center justify-end text-red-800 text-xs font-bold gap-1 mt-6">
               Acessar ferramenta <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
+            </div>
+          </div>
+
+          {/* Card 5: Gerador de Certidão & Remessa ao IPMC */}
+          <div 
+            onClick={() => onNavigate('gerador_certidao')}
+            className="md:col-span-2 group bg-gradient-to-r from-teal-50 via-cyan-50/50 to-blue-50/40 border border-teal-200/80 hover:border-teal-400 rounded-xl p-6 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6"
+          >
+            <div className="space-y-2 max-w-2xl">
+              <div className="flex items-center gap-2">
+                <div className="p-2.5 rounded-lg bg-teal-600 text-white shadow-xs group-hover:scale-105 transition-all">
+                  <FileCheck size={22} />
+                </div>
+                <div>
+                  <span className="text-[10px] bg-teal-100 text-teal-800 font-extrabold uppercase px-2 py-0.5 rounded-md tracking-wider">
+                    Novo Módulo DGEP
+                  </span>
+                  <h3 className="text-base sm:text-lg font-bold text-gray-800 group-hover:text-teal-800 transition-colors">
+                    Gerador de Certidão de Aposentadoria & Remessa ao IPMC
+                  </h3>
+                </div>
+              </div>
+              <p className="text-gray-600 text-xs sm:text-sm leading-relaxed">
+                Emissão oficial da <strong>Certidão de Tempo de Contribuição e Vínculos</strong> (modelo DGEP) para juntada em autos de aposentadoria e geração de <strong>Dossiê com Despacho de Remessa e Termo de Juntada ao IPMC</strong> com quadro analítico de proventos e regras aplicáveis.
+              </p>
+            </div>
+            <div className="flex-shrink-0 self-end sm:self-auto flex items-center gap-1.5 bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold px-4 py-2.5 rounded-lg shadow-xs transition-all group-hover:translate-x-0.5">
+              Emitir Certidão / Dossiê <ArrowRight size={14} className="group-hover:translate-x-1 transition-transform" />
             </div>
           </div>
         </div>

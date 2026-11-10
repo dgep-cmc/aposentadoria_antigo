@@ -22,7 +22,11 @@ import {
   Sparkles,
   Info,
   Lock,
-  Unlock
+  Unlock,
+  Award,
+  History,
+  FileCheck,
+  Download
 } from 'lucide-react';
 import { 
   UnifiedSimulation, 
@@ -34,6 +38,20 @@ import {
 import { getSavedCareerData, getSavedFatoresINSS, getSavedFGValues, getSavedSalaryCaps } from '../utils/settingsStore';
 import { exportToPDF, exportToExcel } from '../utils/exportHelpers';
 import { romanNumerals, stimulusPercentages, ATS_PERCENTAGES, SALARY_CAP_GENERAL, SALARY_CAP_PROCURADOR } from '../data/careers';
+import { 
+  emitirCertidaoSimulacao, 
+  emitirCertidaoOficial, 
+  emitirCertidaoAbonoSimulacao,
+  emitirCertidaoAbonoOficial,
+  construirCertidaoAPartirDeSimulacao 
+} from '../utils/certidaoBuilder';
+import { 
+  CertidaoEmitida, 
+  getCertidoesEmitidas, 
+  getProximoNumeroOficial, 
+  excluirCertidaoEmitida 
+} from '../utils/certidoesEmitidasStore';
+import { gerarCertidaoAposentadoriaPadraoPDF } from '../utils/exportCertidaoPDF';
 
 function calcularTempoRPPS(d1: Date, d2: Date) {
   // Inclusive date logic
@@ -402,6 +420,36 @@ function StepPessoais({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: a
             <option value="M">Masculino</option>
             <option value="F">Feminino</option>
           </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">CPF</label>
+          <input
+            type="text"
+            value={sim.cpf || ''}
+            onChange={e => updateSim('cpf', e.target.value)}
+            placeholder="000.000.000-00"
+            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all font-mono"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">RG (Identidade Funcional)</label>
+          <input
+            type="text"
+            value={sim.rg || ''}
+            onChange={e => updateSim('rg', e.target.value)}
+            placeholder="0.000.000-0"
+            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all font-mono"
+          />
+        </div>
+        <div className="space-y-1 md:col-span-2">
+          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Registro Tribunal de Contas (TCE/PR) — Opcional</label>
+          <input
+            type="text"
+            value={sim.registroTribunalContas || ''}
+            onChange={e => updateSim('registroTribunalContas', e.target.value)}
+            placeholder="Ex: 402750/03 - Resolução nº 8253/2003"
+            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all"
+          />
         </div>
       </div>
     </div>
@@ -1518,6 +1566,83 @@ function StepTempos({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any
 function StepGerar({ sim }: { sim: UnifiedSimulation }) {
   const [opts, setOpts] = useState({ regras: true, proventos: true, ge: true });
   const [showReport, setShowReport] = useState(false);
+  const [notification, setNotification] = useState('');
+
+  // Estados e controle de certidões emitidas no StepGerar
+  const [showModalCertidaoOficial, setShowModalCertidaoOficial] = useState(false);
+  const [showModalAbonoOficial, setShowModalAbonoOficial] = useState(false);
+  const [numeroOficialInput, setNumeroOficialInput] = useState('');
+  const [showHistoricoModal, setShowHistoricoModal] = useState(false);
+  const [historicoCertidoes, setHistoricoCertidoes] = useState<CertidaoEmitida[]>([]);
+
+  const carregarHistorico = () => {
+    setHistoricoCertidoes(getCertidoesEmitidas());
+  };
+
+  useEffect(() => {
+    carregarHistorico();
+  }, []);
+
+  const showNotification = (msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(''), 3500);
+  };
+
+  const handleGerarCertidaoSimulacao = () => {
+    try {
+      emitirCertidaoSimulacao(sim);
+      carregarHistorico();
+      showNotification('Certidão de Simulação (Minuta em PDF) gerada com sucesso e arquivada!');
+    } catch (e) {
+      console.error(e);
+      showNotification('Erro ao gerar a Certidão de Simulação');
+    }
+  };
+
+  const handleGerarAbonoSimulacao = () => {
+    try {
+      emitirCertidaoAbonoSimulacao(sim);
+      carregarHistorico();
+      showNotification('Certidão de Abono de Permanência (Simulação) gerada com sucesso!');
+    } catch (e) {
+      console.error(e);
+      showNotification('Erro ao gerar Certidão de Abono de Permanência');
+    }
+  };
+
+  const handleAbrirModalOficial = () => {
+    setNumeroOficialInput(getProximoNumeroOficial());
+    setShowModalCertidaoOficial(true);
+  };
+
+  const handleAbrirModalAbonoOficial = () => {
+    setNumeroOficialInput(getProximoNumeroOficial());
+    setShowModalAbonoOficial(true);
+  };
+
+  const handleConfirmarEmissaoOficial = () => {
+    try {
+      emitirCertidaoOficial(sim, undefined, numeroOficialInput);
+      carregarHistorico();
+      setShowModalCertidaoOficial(false);
+      showNotification(`Certidão Oficial nº ${numeroOficialInput} emitida com sucesso e registrada no controle!`);
+    } catch (e) {
+      console.error(e);
+      showNotification('Erro ao emitir Certidão Oficial');
+    }
+  };
+
+  const handleConfirmarEmissaoAbonoOficial = () => {
+    try {
+      emitirCertidaoAbonoOficial(sim, undefined, numeroOficialInput);
+      carregarHistorico();
+      setShowModalAbonoOficial(false);
+      showNotification(`Certidão Oficial de Abono de Permanência nº ${numeroOficialInput} emitida com sucesso!`);
+    } catch (e) {
+      console.error(e);
+      showNotification('Erro ao emitir Certidão de Abono de Permanência');
+    }
+  };
 
   // --- Helpers ---
   const formatCurrency = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2673,26 +2798,59 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 print:hidden">
           <button onClick={() => setShowReport(false)} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 transition-all font-bold self-start sm:self-auto"> Voltar</button>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Botão para Certidão de Simulação (sem controle numérico) */}
             <button 
-              className="bg-emerald-600 text-white font-extrabold py-2 px-3.5 rounded-lg hover:bg-emerald-700 transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm" 
+              type="button"
+              className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold py-2 px-3.5 rounded-lg transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer" 
+              onClick={handleGerarCertidaoSimulacao}
+              title="Gerar Certidão de Simulação em PDF (sem controle numérico)"
+            >
+              <FileCheck size={14} /> Certidão de Simulação (PDF)
+            </button>
+
+            {/* Botão para Certidão Oficial com número */}
+            <button 
+              type="button"
+              className="bg-[#002f5a] hover:bg-[#004b8d] text-white font-extrabold py-2 px-3.5 rounded-lg transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
+              onClick={handleAbrirModalOficial}
+              title="Emitir Certidão Oficial DGEP com número sequencial"
+            >
+              <Award size={14} /> Emitir Certidão Oficial
+            </button>
+
+            {/* Controle de Certidões */}
+            <button 
+              type="button"
+              className="bg-slate-700 hover:bg-slate-800 text-white font-bold py-2 px-3.5 rounded-lg transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
+              onClick={() => {
+                carregarHistorico();
+                setShowHistoricoModal(true);
+              }}
+              title="Ver histórico e controle de certidões emitidas"
+            >
+              <History size={14} /> Controle de Certidões ({historicoCertidoes.length})
+            </button>
+
+            <button 
+              className="bg-emerald-600 text-white font-extrabold py-2 px-3.5 rounded-lg hover:bg-emerald-700 transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer" 
               onClick={() => {
                 exportToExcel(simFiltrado, regrasResults, geResults, proventosResults, calculatedDiasSP, calculatedDiasINSS, opts);
               }}
             >
-              <FileText size={14} /> Exportar Excel (.csv)
+              <FileText size={14} /> Excel (.csv)
             </button>
             <button 
-              className="bg-indigo-600 text-white font-extrabold py-2 px-3.5 rounded-lg hover:bg-indigo-700 transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm"
+              className="bg-indigo-600 text-white font-extrabold py-2 px-3.5 rounded-lg hover:bg-indigo-700 transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
               style={{ backgroundColor: '#4f46e5' }}
               onClick={() => {
                 exportToPDF(simFiltrado, regrasResults, geResults, proventosResults, calculatedDiasSP, calculatedDiasINSS, opts);
               }}
             >
-              <FilePlus size={14} /> Exportar PDF Direto
+              <FilePlus size={14} /> Dossiê Completo (PDF)
             </button>
             <button 
-              className="border border-gray-300 text-gray-700 font-bold py-2 px-3.5 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 bg-white shadow-xs" 
+              className="border border-gray-300 text-gray-700 font-bold py-2 px-3.5 rounded-lg hover:bg-gray-50 hover:text-gray-900 transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 bg-white shadow-xs cursor-pointer" 
               onClick={() => {
                 try {
                   window.print();
@@ -2701,7 +2859,7 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
                 }
               }}
             >
-              Imprimir Relatório
+              Imprimir
             </button>
           </div>
         </div>
@@ -3007,13 +3165,13 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
 
                             <div>
                               <span className="block text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">Competências Utilizadas</span>
-                              <strong className="text-xl text-slate-700 font-bold tracking-tight">{proventosResults.histCount} meses</strong>
+                              <strong className="text-xl text-slate-700 font-bold tracking-tight">{opt.totalIncCount} meses</strong>
                             </div>
                           </div>
                         </div>
 
                         <div className="mt-5 pt-3 border-t border-slate-200 text-[11px] text-slate-500">
-                          Cálculo integral considerando 100% dos meses de contribuição no histórico previdenciário do servidor. Base de cálculo composta por {proventosResults.histCount} competências.
+                          Cálculo integral considerando 100% dos meses de contribuição utilizados pós-07/1994 (histórico, projeção e averbações). Base de cálculo composta por {opt.totalIncCount} competências.
                         </div>
                       </div>
 
@@ -3055,7 +3213,7 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
 
                             <div>
                               <span className="block text-[10px] text-emerald-600 font-bold uppercase tracking-wider mb-1">Competências Utilizadas (Otimizadas)</span>
-                              <strong className="text-xl text-emerald-900 font-bold tracking-tight">{proventosResults.histCount - opt.bestK} meses</strong>
+                              <strong className="text-xl text-emerald-900 font-bold tracking-tight">{opt.totalIncCount - opt.bestK} meses</strong>
                             </div>
                           </div>
                         </div>
@@ -3065,7 +3223,7 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
                             Fundamentação Legal Completa: Art. 15, § 10 da Lei Complementar nº 133/2021 (Curitiba - Descarte das Menores Contribuições).
                           </span>
                           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 font-medium">
-                            <span><strong>Contribuições Calculadas:</strong> {proventosResults.histCount - opt.bestK} meses.</span>
+                            <span><strong>Contribuições Calculadas:</strong> {opt.totalIncCount - opt.bestK} meses.</span>
                             <span><strong>Extensão Projetada:</strong> {sim.extensionMonths ?? 0} {sim.extensionMonths === 1 ? 'mês' : 'meses'}</span>
                           </div>
                         </div>
@@ -3479,6 +3637,157 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
             </div>
           )}
 
+          {/* PAINEL DE FINALIZAÇÃO & EMISSÃO DE CERTIDÃO DE APOSENTADORIA */}
+          <div className="bg-gradient-to-br from-[#002f5a]/5 via-[#004b8d]/10 to-blue-50 border-2 border-[#004b8d]/30 rounded-2xl p-6 sm:p-7 space-y-5 print:hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-blue-200/80 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-[#002f5a] text-white rounded-xl shadow-xs">
+                  <Award size={22} />
+                </div>
+                <div>
+                  <h4 className="text-base font-black text-[#002f5a] uppercase tracking-tight">
+                    Finalização da Simulação & Certidão de Tempo de Contribuição
+                  </h4>
+                  <p className="text-xs text-gray-600">
+                    Emita a Certidão oficial DGEP ou gere uma Minuta de Simulação para conferência prévia com o servidor.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleGerarCertidaoSimulacao}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-md hover:shadow-lg cursor-pointer"
+                  title="Minuta de Aposentadoria (Sem número)"
+                >
+                  <FileCheck size={14} /> Minuta Aposentadoria
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleAbrirModalOficial}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#002f5a] hover:bg-[#004b8d] text-white text-xs font-bold transition-all shadow-md hover:shadow-lg cursor-pointer"
+                  title="Certidão Oficial de Aposentadoria (Com número)"
+                >
+                  <Award size={14} /> Oficial Aposentadoria
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleGerarAbonoSimulacao}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-all shadow-md hover:shadow-lg cursor-pointer"
+                  title="Minuta de Abono de Permanência (Sem número)"
+                >
+                  <FileCheck size={14} /> Minuta Abono
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleAbrirModalAbonoOficial}
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#581c87] hover:bg-[#4c1d95] text-white text-xs font-bold transition-all shadow-md hover:shadow-lg cursor-pointer"
+                  title="Certidão Oficial de Abono de Permanência com Numeração"
+                >
+                  <Award size={14} /> Oficial Abono de Permanência
+                </button>
+              </div>
+            </div>
+
+            {/* Resumo da Grade de Tempo Apurada */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Tempo Estatutário CMC (Linha 1)</span>
+                <strong className="text-sm text-gray-900 block font-mono">
+                  {formatarTempo(Math.max(0, timeInDays))}
+                </strong>
+                <span className="text-[10px] text-gray-500 block">Vínculo efetivo no cargo</span>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Tempo Público Averbado (SP)</span>
+                <strong className="text-sm text-gray-900 block font-mono">
+                  {formatarTempo(calculatedDiasSP)}
+                </strong>
+                <span className="text-[10px] text-gray-500 block">Tempo CLT / averbações públicas</span>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
+                <span className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wide block">Tempo Total Geral Contribuição</span>
+                <strong className="text-sm text-[#004b8d] block font-mono font-bold">
+                  {formatarTempo(Math.max(0, totalDays - (sim.diasAfastamento || 0)))}
+                </strong>
+                <span className="text-[10px] text-gray-500 block">CMC + Averbados - Deduções</span>
+              </div>
+            </div>
+
+            {/* Certidões Já Emitidas para este Servidor */}
+            {(() => {
+              const emitidasServidor = historicoCertidoes.filter(c => 
+                (sim.matricula && c.matricula === sim.matricula) || 
+                (sim.nome && c.servidorNome.toLowerCase() === sim.nome.toLowerCase())
+              );
+
+              if (emitidasServidor.length === 0) return null;
+
+              return (
+                <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-2xs space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-extrabold text-[#002f5a] flex items-center gap-1.5 uppercase">
+                      <History size={14} className="text-[#004b8d]" />
+                      Documentos Já Emitidos para este Servidor ({emitidasServidor.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        carregarHistorico();
+                        setShowHistoricoModal(true);
+                      }}
+                      className="text-[11px] font-bold text-[#004b8d] hover:underline cursor-pointer"
+                    >
+                      Ver histórico completo
+                    </button>
+                  </div>
+
+                  <div className="divide-y divide-gray-150 text-xs">
+                    {emitidasServidor.map(doc => (
+                      <div key={doc.id} className="py-2 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          {doc.tipo === 'oficial' ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-100 text-blue-900 border border-blue-200 font-mono">
+                              Oficial nº {doc.numeroCertidao}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-200">
+                              SIMULAÇÃO
+                            </span>
+                          )}
+                          <span className="text-gray-600 font-medium">
+                            {doc.tempoFormatado} • Emissão: {new Date(doc.dataEmissaoTimestamp).toLocaleDateString('pt-BR')}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              gerarCertidaoAposentadoriaPadraoPDF(doc.snapshot);
+                              showNotification(`Certidão (${doc.numeroCertidao}) baixada novamente!`);
+                            } catch (e) {
+                              alert('Erro ao gerar PDF');
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Download size={11} /> Baixar Novamente
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
           <div className="pt-8 text-center text-xs text-gray-400 font-semibold uppercase">Diretoria de Gestão de Pessoas - Elaborado pelo Sistema DGEP Web<br />{new Date().toLocaleString('pt-BR')}</div>
         </div>
       </div>
@@ -3499,9 +3808,265 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
         </label>
       </div>
 
-      <div className="pt-4 flex flex-col sm:flex-row gap-4">
-        <button className="flex-1 bg-emerald-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-emerald-700 transition-all shadow-md uppercase tracking-wide flex justify-center items-center gap-2" onClick={() => setShowReport(true)}>Gerar Relatório Integrado</button>
+      {/* Opção Rápida de Emissão de Certidão na Etapa 6 */}
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 p-4 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+        <div>
+          <span className="text-xs font-bold text-[#002f5a] uppercase flex items-center gap-1.5">
+            <Award size={15} className="text-[#004b8d]" />
+            Emissão Direta da Certidão de Aposentadoria
+          </span>
+          <p className="text-xs text-gray-600 mt-0.5">
+            Você pode gerar diretamente a <strong>Certidão de Simulação</strong> (sem número) ou a <strong>Certidão Oficial</strong> com os dados atuais deste servidor.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={handleGerarCertidaoSimulacao}
+            className="flex-1 sm:flex-initial px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+            title="Gerar Certidão de Simulação em PDF sem número oficial"
+          >
+            <FileCheck size={14} /> Certidão de Simulação
+          </button>
+          <button
+            type="button"
+            onClick={handleAbrirModalOficial}
+            className="flex-1 sm:flex-initial px-3.5 py-2 bg-[#002f5a] hover:bg-[#004b8d] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+            title="Emitir Certidão Oficial de Aposentadoria com número sequencial DGEP"
+          >
+            <Award size={14} /> Oficial Aposentadoria
+          </button>
+          <button
+            type="button"
+            onClick={handleAbrirModalAbonoOficial}
+            className="flex-1 sm:flex-initial px-3.5 py-2 bg-[#581c87] hover:bg-[#4c1d95] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+            title="Emitir Certidão Oficial de Abono de Permanência com numeração DGEP"
+          >
+            <Award size={14} /> Oficial Abono de Permanência
+          </button>
+        </div>
       </div>
+
+      <div className="pt-4 flex flex-col sm:flex-row gap-4">
+        <button className="flex-1 bg-emerald-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-emerald-700 transition-all shadow-md uppercase tracking-wide flex justify-center items-center gap-2 cursor-pointer" onClick={() => setShowReport(true)}>Gerar Relatório Integrado</button>
+      </div>
+
+      {/* MODAL PARA EMISSÃO DA CERTIDÃO OFICIAL */}
+      {showModalCertidaoOficial && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-200 space-y-4 animate-scale-in">
+            <div className="flex items-center justify-between border-b border-gray-150 pb-3">
+              <div className="flex items-center gap-2 text-[#002f5a]">
+                <Award size={20} className="text-[#004b8d]" />
+                <h3 className="font-extrabold text-sm uppercase">Emitir Certidão Oficial DGEP</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowModalCertidaoOficial(false)}
+                className="text-gray-400 hover:text-gray-600 cursor-pointer p-1"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed">
+              Esta ação irá gerar o documento oficial em PDF no padrão da Diretoria de Gestão de Pessoas da CMC e gravar o registro no <strong>Controle de Certidões Emitidas</strong>.
+            </p>
+
+            <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl space-y-1 text-xs">
+              <span className="font-bold text-blue-900 block">Servidor Selecionado:</span>
+              <strong className="text-gray-900 block">{sim.nome || 'Servidor Municipal'} (Matrícula: {sim.matricula || '-'})</strong>
+              <span className="text-gray-600 block">Cargo: {(sim.cargo || sim.selectedCareer).replace(/_/g, ' ')}</span>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-gray-700">
+                Número Sequencial da Certidão
+              </label>
+              <input
+                type="text"
+                value={numeroOficialInput}
+                onChange={(e) => setNumeroOficialInput(e.target.value)}
+                placeholder="Ex: 04/2026"
+                className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono font-bold text-[#004b8d]"
+              />
+              <span className="text-[10px] text-gray-400 block">
+                Você pode manter o número sequencial gerado automaticamente ou ajustar manualmente.
+              </span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-150">
+              <button
+                type="button"
+                onClick={() => setShowModalCertidaoOficial(false)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarEmissaoOficial}
+                className="px-4 py-2 bg-[#002f5a] hover:bg-[#004b8d] text-white rounded-lg text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5"
+              >
+                <Download size={14} /> Confirmar & Gerar PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PARA EMISSÃO DA CERTIDÃO OFICIAL DE ABONO DE PERMANÊNCIA */}
+      {showModalAbonoOficial && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-200 space-y-4 animate-scale-in">
+            <div className="flex items-center justify-between border-b border-gray-150 pb-3">
+              <div className="flex items-center gap-2 text-[#581c87]">
+                <Award size={20} className="text-[#581c87]" />
+                <h3 className="font-extrabold text-sm uppercase">Emitir Certidão Oficial de Abono de Permanência</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowModalAbonoOficial(false)}
+                className="text-gray-400 hover:text-gray-600 cursor-pointer p-1"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600 leading-relaxed">
+              Esta ação irá gerar a <strong>Certidão de Abono de Permanência</strong> oficial em PDF com numeração sequencial e registrar no controle de emissões.
+            </p>
+
+            <div className="bg-purple-50 border border-purple-200 p-3 rounded-xl space-y-1 text-xs">
+              <span className="font-bold text-purple-900 block">Servidor Selecionado:</span>
+              <strong className="text-gray-900 block">{sim.nome || 'Servidor Municipal'} (Matrícula: {sim.matricula || '-'})</strong>
+              <span className="text-gray-600 block">Cargo: {(sim.cargo || sim.selectedCareer).replace(/_/g, ' ')}</span>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-gray-700">
+                Número Sequencial da Certidão
+              </label>
+              <input
+                type="text"
+                value={numeroOficialInput}
+                onChange={(e) => setNumeroOficialInput(e.target.value)}
+                placeholder="Ex: 04/2026"
+                className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 font-mono font-bold text-[#581c87]"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-150">
+              <button
+                type="button"
+                onClick={() => setShowModalAbonoOficial(false)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarEmissaoAbonoOficial}
+                className="px-4 py-2 bg-[#581c87] hover:bg-[#4c1d95] text-white rounded-lg text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5"
+              >
+                <Download size={14} /> Confirmar & Gerar PDF Abono
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE HISTÓRICO E CONTROLE DE CERTIDÕES EMITIDAS */}
+      {showHistoricoModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-2xl border border-gray-200 space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-gray-150 pb-3">
+              <div className="flex items-center gap-2 text-[#002f5a]">
+                <History size={20} className="text-[#004b8d]" />
+                <h3 className="font-extrabold text-sm uppercase">Controle de Certidões Emitidas ({historicoCertidoes.length})</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHistoricoModal(false)}
+                className="text-gray-400 hover:text-gray-600 cursor-pointer p-1"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 divide-y divide-gray-150 pr-1">
+              {historicoCertidoes.length === 0 ? (
+                <div className="text-center py-10 text-gray-400 text-xs font-medium">
+                  Nenhuma certidão emitida até o momento.
+                </div>
+              ) : (
+                historicoCertidoes.map((item) => (
+                  <div key={item.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-gray-50 p-2 rounded-lg transition-colors">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        {item.tipo === 'oficial' ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-100 text-blue-900 border border-blue-200 font-mono">
+                            Oficial nº {item.numeroCertidao}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-200">
+                            SIMULAÇÃO
+                          </span>
+                        )}
+                        <strong className="text-xs text-gray-900">{item.servidorNome}</strong>
+                        <span className="text-[11px] text-gray-500 font-mono">({item.matricula || 'S/ Matrícula'})</span>
+                      </div>
+                      <p className="text-[11px] text-gray-600">
+                        {item.tempoFormatado} • Data: {item.dataCertidao} • Emissão: {new Date(item.dataEmissaoTimestamp).toLocaleDateString('pt-BR')} {new Date(item.dataEmissaoTimestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            gerarCertidaoAposentadoriaPadraoPDF(item.snapshot);
+                            showNotification(`Certidão (${item.numeroCertidao}) baixada novamente!`);
+                          } catch (e) {
+                            alert('Erro ao gerar o PDF');
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-[#004b8d] rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Download size={13} /> Baixar PDF
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm(`Excluir registro da certidão ${item.numeroCertidao} do servidor ${item.servidorNome}?`)) {
+                            excluirCertidaoEmitida(item.id);
+                            carregarHistorico();
+                          }
+                        }}
+                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer transition-colors"
+                        title="Excluir do histórico"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-gray-150 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowHistoricoModal(false)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold cursor-pointer"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

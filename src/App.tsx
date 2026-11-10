@@ -8,6 +8,7 @@ import GratificacaoEspecial from './components/GratificacaoEspecial';
 import SimulacaoCompleta from './components/SimulacaoCompleta';
 import SimulacoesSalvas from './components/SimulacoesSalvas';
 import Cadastros from './components/Cadastros';
+import GeradorCertidao from './components/GeradorCertidao';
 import { Scale, CheckCircle2, Menu, LogOut, ShieldAlert, UserCheck } from 'lucide-react';
 import { initMigration } from './utils/simulationsStore';
 import { loadSettingsFromServer } from './utils/settingsStore';
@@ -169,6 +170,8 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard onNavigate={(tabId) => setActiveTab(tabId)} />;
+      case 'gerador_certidao':
+        return <GeradorCertidao />;
       case 'proventos':
         return <ProventosAposentadoria />;
       case 'regras':
@@ -192,6 +195,8 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return 'Início';
+      case 'gerador_certidao':
+        return 'Gerador de Certidão & Remessa ao IPMC';
       case 'proventos':
         return 'Cálculo de Proventos de Aposentadoria';
       case 'regras':

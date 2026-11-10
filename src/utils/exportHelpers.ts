@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { UnifiedSimulation } from './simulationsStore';
+import { CMC_LOGO_BASE64, CMC_LOGO_ASPECT_RATIO } from './cmcLogo';
 
 // Common currency formatter helper
 const formatCurrency = (val: number | undefined): string => {
@@ -117,20 +118,36 @@ export function exportToPDF(
   const totalDiasSPConsolidado = Math.max(0, timeInDays + calculatedDiasSP - (sim.diasAfastamento || 0));
   const totalDiasContribConsolidado = Math.max(0, timeInDays + calculatedDiasSP + calculatedDiasINSS - (sim.diasAfastamento || 0));
 
-  // Top header bar
-  doc.setFillColor(0, 75, 141); // Deep Blue #004b8d
+  // Top header bar com Logomarca Oficial CMC
+  doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, 210, 28, 'F');
-  
+  doc.setFillColor(0, 75, 141);
+  doc.rect(0, 0, 210, 2.5, 'F');
+  doc.setDrawColor(215, 225, 235);
+  doc.setLineWidth(0.3);
+  doc.line(0, 28, 210, 28);
+
+  const logoW = 38;
+  const logoH = logoW / CMC_LOGO_ASPECT_RATIO;
+  doc.addImage(CMC_LOGO_BASE64, 'PNG', 15, 6, logoW, logoH);
+
+  doc.setDrawColor(210, 220, 230);
+  doc.setLineWidth(0.2);
+  doc.line(15 + logoW + 5, 5, 15 + logoW + 5, 24);
+
+  const titleX = 15 + logoW + 9;
   doc.setFont('Helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.setTextColor(255, 255, 255);
-  doc.text('DGEP - APOSENTADORIA E PROVENTOS', 15, 11);
+  doc.setFontSize(12.5);
+  doc.setTextColor(0, 47, 90);
+  doc.text('DGEP - APOSENTADORIA E PROVENTOS', titleX, 12);
   
   doc.setFont('Helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(200, 220, 255);
-  doc.text('Câmara Municipal de Curitiba | Diretoria de Gestão de Pessoas', 15, 17);
-  doc.text('Dossiê Analítico de Simulação de Aposentadoria', 15, 22);
+  doc.setFontSize(8.5);
+  doc.setTextColor(70, 70, 70);
+  doc.text('Diretoria de Gestão de Pessoas — DGEP', titleX, 17.5);
+  doc.setFontSize(7.5);
+  doc.setTextColor(110, 110, 110);
+  doc.text('Dossiê Analítico de Simulação de Aposentadoria • Lei Complementar nº 133/2021', titleX, 22.5);
 
   // Box 0: Server Identity Block
   const serverDetailsGrid = [

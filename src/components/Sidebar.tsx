@@ -12,7 +12,8 @@ import {
   UserCheck,
   Database,
   Layers,
-  Inbox
+  Inbox,
+  FileCheck
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -25,6 +26,7 @@ interface SidebarProps {
 export default function Sidebar({ activeTab, onSelectTab, isMobileOpen, setIsMobileOpen }: SidebarProps) {
   const navItems = [
     { id: 'dashboard', label: 'Início', icon: LayoutDashboard, color: 'text-blue-500' },
+    { id: 'gerador_certidao', label: 'Gerador de Certidão', icon: FileCheck, color: 'text-teal-400' },
     { id: 'simulacao_completa', label: 'Simulação Completa', icon: Layers, color: 'text-purple-400' },
     { id: 'simulacoes_salvas', label: 'Simulações Salvas', icon: Inbox, color: 'text-pink-400' },
     { id: 'proventos', label: 'Simulador Proventos', icon: TrendingUp, color: 'text-blue-600' },
