@@ -1,19 +1,9 @@
 import { useState } from 'react';
 import { 
   LayoutDashboard, 
-  ShieldAlert, 
-  TrendingUp, 
-  RefreshCw, 
-  Award, 
-  Menu, 
-  ChevronLeft, 
-  ChevronRight,
   Calculator, 
-  UserCheck,
-  Database,
-  Layers,
-  Inbox,
-  FileCheck
+  Users,
+  Database
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -25,15 +15,9 @@ interface SidebarProps {
 
 export default function Sidebar({ activeTab, onSelectTab, isMobileOpen, setIsMobileOpen }: SidebarProps) {
   const navItems = [
-    { id: 'dashboard', label: 'Início', icon: LayoutDashboard, color: 'text-blue-500' },
-    { id: 'gerador_certidao', label: 'Gerador de Certidão', icon: FileCheck, color: 'text-teal-400' },
-    { id: 'simulacao_completa', label: 'Simulação Completa', icon: Layers, color: 'text-purple-400' },
-    { id: 'simulacoes_salvas', label: 'Simulações Salvas', icon: Inbox, color: 'text-pink-400' },
-    { id: 'proventos', label: 'Simulador Proventos', icon: TrendingUp, color: 'text-blue-600' },
-    { id: 'regras', label: 'Simulador Regras', icon: ShieldAlert, color: 'text-emerald-600' },
-    { id: 'atualizacao', label: 'Atualização de Contribuições', icon: RefreshCw, color: 'text-amber-600' },
-    { id: 'gratificacao', label: 'Gratificação Especial', icon: Award, color: 'text-red-700' },
-    { id: 'cadastros', label: 'Gestão de Cadastros', icon: Database, color: 'text-indigo-400' }
+    { id: 'dashboard', label: 'Início', icon: LayoutDashboard, color: 'text-blue-400' },
+    { id: 'servidores', label: 'Servidores & Documentos', icon: Users, color: 'text-teal-300' },
+    { id: 'cadastros', label: 'Cadastros & Atualização', icon: Database, color: 'text-indigo-300' }
   ];
 
   return (
@@ -71,7 +55,11 @@ export default function Sidebar({ activeTab, onSelectTab, isMobileOpen, setIsMob
           <nav className="flex-1 p-3 space-y-1 pt-6">
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = activeTab === item.id;
+              const isActive =
+                activeTab === item.id ||
+                (item.id === 'servidores' &&
+                  ['simulacoes_salvas', 'simulacao_completa', 'gerador_certidao', 'acompanhamento'].includes(activeTab)) ||
+                (item.id === 'cadastros' && activeTab === 'atualizacao');
               return (
                 <button
                   key={item.id}

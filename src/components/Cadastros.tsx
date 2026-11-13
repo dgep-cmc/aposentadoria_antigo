@@ -18,23 +18,28 @@ import {
   Shield,
   UserCheck,
   XCircle,
-  X
+  X,
+  RefreshCw
 } from 'lucide-react';
+import AtualizacaoContribuicoes from './AtualizacaoContribuicoes';
 import { 
   romanNumerals, 
   careerDisplayNames 
 } from '../data/careers';
 import { 
   getSavedCareerData, 
+  getSavedCareerPatterns,
   getSavedFGValues, 
   getSavedFatoresINSS,
   getSavedSalaryCaps,
   saveCareerData, 
+  saveCareerPatterns,
   saveFGValues, 
   saveFatoresINSS,
   saveSalaryCaps,
   resetSettingsToDefaults,
   CareerDataType,
+  CareerPatternMap,
   FGValuesType,
   FatoresINSSData,
   defaultFatoresINSS,
@@ -50,9 +55,11 @@ import {
   deleteRegisteredUser 
 } from '../utils/firebase';
 
-export default function Cadastros() {
-  // Tabs in order: 'users' | 'fatores' | 'careers' | 'fgs' | 'salaryCaps'
-  const [activeTab, setActiveTab] = useState<'users' | 'fatores' | 'careers' | 'fgs' | 'salaryCaps'>('users');
+type CadastrosTab = 'users' | 'fatores' | 'atualizacao' | 'careers' | 'fgs' | 'salaryCaps';
+
+export default function Cadastros({ initialTab }: { initialTab?: CadastrosTab }) {
+  // Tabs in order: 'users' | 'fatores' | 'atualizacao' | 'careers' | 'fgs' | 'salaryCaps'
+  const [activeTab, setActiveTab] = useState<CadastrosTab>(initialTab || 'users');
   
   // Selected career for career editing
   const [selectedCareer, setSelectedCareer] = useState<string>('assistente_administrativo');
@@ -78,6 +85,20 @@ export default function Cadastros() {
         const parsed = JSON.parse(draft);
         if (parsed && Object.keys(parsed).length > 0) {
           return parsed;
+        }
+      } catch (e) {}
+    }
+    return loaded;
+  });
+
+  const [careerPatterns, setCareerPatterns] = useState<CareerPatternMap>(() => {
+    const loaded = getSavedCareerPatterns();
+    const draft = localStorage.getItem('dgep_draft_career_patterns');
+    if (draft) {
+      try {
+        const parsed = JSON.parse(draft);
+        if (parsed && typeof parsed === 'object') {
+          return { ...loaded, ...parsed };
         }
       } catch (e) {}
     }
@@ -144,6 +165,9 @@ export default function Cadastros() {
   const [pristineCareersData, setPristineCareersData] = useState<CareerDataType>(() => {
     return JSON.parse(JSON.stringify(getSavedCareerData()));
   });
+  const [pristineCareerPatterns, setPristineCareerPatterns] = useState<CareerPatternMap>(() => {
+    return JSON.parse(JSON.stringify(getSavedCareerPatterns()));
+  });
   const [pristineFgValues, setPristineFgValues] = useState<FGValuesType>(() => {
     return JSON.parse(JSON.stringify(getSavedFGValues()));
   });
@@ -161,11 +185,14 @@ export default function Cadastros() {
   const [showConfirmReset, setShowConfirmReset] = useState(false);
   const [showConfirmSave, setShowConfirmSave] = useState(false);
 
-  // Load saved tab on mount
   useEffect(() => {
-    const draftTab = localStorage.getItem('dgep_draft_cadastros_tab');
-    if (draftTab === 'users' || draftTab === 'careers' || draftTab === 'fgs' || draftTab === 'fatores') {
-      setActiveTab(draftTab as any);
+    if (initialTab) {
+      setActiveTab(initialTab);
+    } else {
+      const draftTab = localStorage.getItem('dgep_draft_cadastros_tab');
+      if (draftTab === 'users' || draftTab === 'careers' || draftTab === 'fgs' || draftTab === 'fatores' || draftTab === 'atualizacao' || draftTab === 'salaryCaps') {
+        setActiveTab(draftTab);
+      }
     }
     
     const draftSearch = localStorage.getItem('dgep_draft_cadastros_search');
@@ -173,7 +200,7 @@ export default function Cadastros() {
     
     const draftSelectedCareer = localStorage.getItem('dgep_draft_cadastros_selected_career');
     if (draftSelectedCareer) setSelectedCareer(draftSelectedCareer);
-  }, []);
+  }, [initialTab]);
 
   // Fetch Firestore users list and check current user authorization level
   const loadUsersAndPrivileges = async () => {
@@ -206,6 +233,12 @@ export default function Cadastros() {
   }, [careersData]);
 
   useEffect(() => {
+    if (Object.keys(careerPatterns).length > 0) {
+      localStorage.setItem('dgep_draft_career_patterns', JSON.stringify(careerPatterns));
+    }
+  }, [careerPatterns]);
+
+  useEffect(() => {
     if (Object.keys(fgValues).length > 0 && fgValues.FG4 > 0) {
       localStorage.setItem('dgep_draft_fg_values', JSON.stringify(fgValues));
     }
@@ -236,7 +269,9 @@ export default function Cadastros() {
   }, [selectedCareer]);
 
   // Is database currently modified?
-  const isCareersDirty = JSON.stringify(careersData) !== JSON.stringify(pristineCareersData);
+  const isCareersDirty =
+    JSON.stringify(careersData) !== JSON.stringify(pristineCareersData) ||
+    JSON.stringify(careerPatterns) !== JSON.stringify(pristineCareerPatterns);
   const isFGSDirty = JSON.stringify(fgValues) !== JSON.stringify(pristineFgValues);
   const isFatoresDirty = JSON.stringify(fatoresINSS) !== JSON.stringify(pristineFatoresINSS);
   const isSalaryCapsDirty = JSON.stringify(salaryCaps) !== JSON.stringify(pristineSalaryCaps);
@@ -376,9 +411,12 @@ export default function Cadastros() {
     try {
       if (activeTab === 'careers') {
         saveCareerData(careersData);
+        saveCareerPatterns(careerPatterns);
         setPristineCareersData(JSON.parse(JSON.stringify(careersData)));
+        setPristineCareerPatterns(JSON.parse(JSON.stringify(careerPatterns)));
         localStorage.removeItem('dgep_draft_career_data');
-        showNotificationObj('success', 'Os valores dos salários por cargo foram salvos e aplicados com sucesso!');
+        localStorage.removeItem('dgep_draft_career_patterns');
+        showNotificationObj('success', 'Os valores dos salários e códigos de padrão por cargo foram salvos e aplicados com sucesso!');
       } else if (activeTab === 'fgs') {
         saveFGValues(fgValues);
         setPristineFgValues(JSON.parse(JSON.stringify(fgValues)));
@@ -408,19 +446,23 @@ export default function Cadastros() {
   const handleResetDefaults = () => {
     resetSettingsToDefaults();
     localStorage.removeItem('dgep_draft_career_data');
+    localStorage.removeItem('dgep_draft_career_patterns');
     localStorage.removeItem('dgep_draft_fg_values');
     localStorage.removeItem('dgep_draft_salary_caps');
     const loadedCareers = getSavedCareerData();
+    const loadedPatterns = getSavedCareerPatterns();
     const loadedFGs = getSavedFGValues();
     const loadedSalaryCaps = getSavedSalaryCaps();
     setCareersData(loadedCareers);
     setPristineCareersData(JSON.parse(JSON.stringify(loadedCareers)));
+    setCareerPatterns(loadedPatterns);
+    setPristineCareerPatterns(JSON.parse(JSON.stringify(loadedPatterns)));
     setFgValues(loadedFGs);
     setPristineFgValues(JSON.parse(JSON.stringify(loadedFGs)));
     setSalaryCaps(loadedSalaryCaps);
     setPristineSalaryCaps(JSON.parse(JSON.stringify(loadedSalaryCaps)));
     setShowConfirmReset(false);
-    showNotificationObj('success', 'Os salários base, referências das FGs e limites do Teto Constitucional foram restaurados com sucesso para os padrões. O cadastro dos Fatores de Conversão foi preservado.');
+    showNotificationObj('success', 'Os salários base, padrões por cargo, referências das FGs e limites do Teto Constitucional foram restaurados com sucesso para os padrões. O cadastro dos Fatores de Conversão foi preservado.');
   };
 
   const currentCareerValues = careersData[selectedCareer] || {};
@@ -433,10 +475,10 @@ export default function Cadastros() {
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-gray-800 flex items-center gap-2">
               <Database className="text-indigo-650" size={24} />
-              Gestão de Cadastros
+              Cadastros & Atualização de Contribuições
             </h1>
             <p className="text-gray-500 text-xs sm:text-sm mt-1">
-              Painel administrativo para controle de acesso de usuários e parametrização dos fatores, cargos e funções do sistema
+              Parametrização das tabelas administrativas, fatores INSS, atualização monetária em lote e controle de acesso de usuários
             </p>
           </div>
           <button 
@@ -483,7 +525,7 @@ export default function Cadastros() {
           </button>
           <button
             onClick={() => setActiveTab('fatores')}
-            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+            className={`py-3 px-5 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
               activeTab === 'fatores'
                 ? 'border-indigo-600 text-indigo-700'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -492,18 +534,28 @@ export default function Cadastros() {
             <TrendingUp size={16} /> Fatores de Conversão
           </button>
           <button
+            onClick={() => setActiveTab('atualizacao')}
+            className={`py-3 px-5 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+              activeTab === 'atualizacao'
+                ? 'border-indigo-600 text-indigo-700'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <RefreshCw size={16} /> Atualização de Contribuições
+          </button>
+          <button
             onClick={() => setActiveTab('careers')}
-            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+            className={`py-3 px-5 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
               activeTab === 'careers'
                 ? 'border-indigo-600 text-indigo-700'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            <Briefcase size={16} /> Salários Base por Cargo
+            <Briefcase size={16} /> Salários e Padrões
           </button>
           <button
             onClick={() => setActiveTab('fgs')}
-            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+            className={`py-3 px-5 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
               activeTab === 'fgs'
                 ? 'border-indigo-600 text-indigo-700'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -513,7 +565,7 @@ export default function Cadastros() {
           </button>
           <button
             onClick={() => setActiveTab('salaryCaps')}
-            className={`py-3 px-6 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
+            className={`py-3 px-5 text-sm font-bold border-b-2 cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
               activeTab === 'salaryCaps'
                 ? 'border-indigo-600 text-indigo-700'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -529,8 +581,10 @@ export default function Cadastros() {
           <div>
             {activeTab === 'users' ? (
               <span>Os usuários cadastrados nesta tela possuem acesso controlado via Google Authentication. Apenas administradores do sistema têm permissão para adicionar ou remover perfis de acesso.</span>
+            ) : activeTab === 'atualizacao' ? (
+              <span>Processador em lote para correção monetária de salários de contribuição utilizando diretamente a tabela vigente cadastrada na aba <strong>Fatores de Conversão</strong>.</span>
             ) : (
-              <span>As calculadoras do **Simulador de Proventos** e da **Gratificação Especial** utilizam em tempo real os valores cadastrados neste painel. Quaisquer alterações salvas aqui afetarão imediatamente as projeções salariais.</span>
+              <span>As simulações e documentos do <strong>Dossiê do Servidor</strong> utilizam em tempo real os valores, padrões e fatores cadastrados neste painel. Quaisquer alterações salvas aqui afetarão imediatamente os cálculos.</span>
             )}
           </div>
         </div>
@@ -730,15 +784,15 @@ export default function Cadastros() {
                     key={key}
                     type="button"
                     onClick={() => setSelectedCareer(key)}
-                    className={`w-full text-left p-3 text-xs sm:text-sm font-semibold transition-all hover:bg-gray-50 flex items-center justify-between cursor-pointer ${
+                    className={`w-full text-left p-3 text-xs sm:text-sm font-semibold transition-all hover:bg-gray-50 flex items-center justify-between gap-2 cursor-pointer ${
                       selectedCareer === key
                         ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 text-indigo-900 font-bold'
                         : 'text-gray-600'
                     }`}
                   >
                     <span className="truncate">{name}</span>
-                    <span className="text-[10px] font-mono font-medium px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full group-hover:bg-indigo-100">
-                      36 faixas
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full shrink-0">
+                      {careerPatterns[key] ? `Padrão ${careerPatterns[key]}` : 'Sem padrão'}
                     </span>
                   </button>
                 ))}
@@ -758,12 +812,26 @@ export default function Cadastros() {
                     {careerDisplayNames[selectedCareer] || selectedCareer}
                   </h3>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    Modifique diretamente no campo de texto o salário básico cadastrado para cada faixa (BRL)
+                    Defina o código do padrão do cargo (usado automaticamente nas certidões) e o salário básico por faixa (BRL)
                   </p>
                 </div>
-                <span className="text-[10px] font-mono bg-indigo-100 text-indigo-800 font-bold px-3 py-1 rounded-full uppercase">
-                  Cargo ID: {selectedCareer}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1.5 bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5">
+                    <label className="text-[10px] font-bold uppercase text-indigo-900 whitespace-nowrap">
+                      Padrão:
+                    </label>
+                    <input
+                      type="text"
+                      value={careerPatterns[selectedCareer] ?? ''}
+                      onChange={(e) => setCareerPatterns(prev => ({ ...prev, [selectedCareer]: e.target.value }))}
+                      placeholder="Ex: 201"
+                      className="w-16 text-xs font-mono font-bold text-gray-900 bg-transparent focus:outline-none text-center"
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono bg-indigo-100 text-indigo-800 font-bold px-3 py-1 rounded-full uppercase">
+                    Cargo ID: {selectedCareer}
+                  </span>
+                </div>
               </div>
 
               {/* Faixas Grid list */}
@@ -958,8 +1026,12 @@ export default function Cadastros() {
           </div>
         )}
 
+        {activeTab === 'atualizacao' && (
+          <AtualizacaoContribuicoes embedded />
+        )}
+
         {/* Global Action Save bar - Only visible for parameters tabs */}
-        {activeTab !== 'users' && (
+        {activeTab !== 'users' && activeTab !== 'atualizacao' && (
           <div className="flex flex-col sm:flex-row gap-4 pt-4 border-t border-gray-100 items-center justify-between">
             <div className="text-xs">
               {isDirty ? (

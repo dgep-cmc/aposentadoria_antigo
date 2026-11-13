@@ -35,7 +35,7 @@ import {
   createNewSimulation,
   saveSimulation
 } from '../utils/simulationsStore';
-import { getSavedCareerData, getSavedFatoresINSS, getSavedFGValues, getSavedSalaryCaps } from '../utils/settingsStore';
+import { getSavedCareerData, getSavedFatoresINSS, getSavedFGValues, getSavedSalaryCaps, getPatternForCareer } from '../utils/settingsStore';
 import { exportToPDF, exportToExcel } from '../utils/exportHelpers';
 import { romanNumerals, stimulusPercentages, ATS_PERCENTAGES, SALARY_CAP_GENERAL, SALARY_CAP_PROCURADOR } from '../data/careers';
 import { 
@@ -117,16 +117,16 @@ export default function SimulacaoCompleta() {
     return defaults;
   });
   
-  const [notification, setNotification] = useState('');
+  const [notification, setNotification] = useState<{ text: string; isError?: boolean } | null>(null);
   const [showNewSimModal, setShowNewSimModal] = useState(false);
 
   useEffect(() => {
     saveDraftSimulation(sim);
   }, [sim]);
 
-  const showNotification = (msg: string) => {
-    setNotification(msg);
-    setTimeout(() => setNotification(''), 3000);
+  const showNotification = (msg: string, isError = false) => {
+    setNotification({ text: msg, isError });
+    setTimeout(() => setNotification(null), 3500);
   };
 
   const handleSave = async () => {
@@ -134,7 +134,7 @@ export default function SimulacaoCompleta() {
       await saveSimulation(sim);
       showNotification('Simulação salva com sucesso!');
     } catch (e) {
-      showNotification('Erro ao salvar simulação');
+      showNotification('Erro ao salvar simulação', true);
     }
   };
 
@@ -144,7 +144,7 @@ export default function SimulacaoCompleta() {
         await saveSimulation(sim);
         showNotification('Simulação salva com sucesso!');
       } catch (e) {
-        showNotification('Erro ao salvar simulação');
+        showNotification('Erro ao salvar simulação', true);
       }
     }
     const defaults = createNewSimulation();
@@ -158,7 +158,7 @@ export default function SimulacaoCompleta() {
   const prevStep = () => setCurrentStep(prev => Math.max(prev - 1, 1));
 
   const updateSim = (field: keyof UnifiedSimulation, value: any) => {
-    setSim(prev => ({ ...prev, [field]: value }));
+    setSim(prev => ({ ...prev, [field]: value, updatedAt: new Date().toISOString() }));
   };
 
   const stepVariants = {
@@ -201,7 +201,8 @@ export default function SimulacaoCompleta() {
                   ...prev,
                   congelada: true,
                   fatoresCongeladosText: latestFatores.fatoresText,
-                  fatoresCongeladosMonthYear: latestFatores.referenceMonthYear
+                  fatoresCongeladosMonthYear: latestFatores.referenceMonthYear,
+                  updatedAt: new Date().toISOString()
                 }));
                 showNotification(`Simulação finalizada e congelada (Fatores Ref: ${latestFatores.referenceMonthYear || 'Atual'}).`);
               }}
@@ -222,8 +223,8 @@ export default function SimulacaoCompleta() {
       </div>
       
       {notification && (
-        <div className="bg-emerald-50 text-emerald-700 p-3 rounded-lg flex items-center gap-2 text-sm font-bold">
-          <CheckCircle size={16} /> {notification}
+        <div className={`p-3 rounded-lg flex items-center gap-2 text-sm font-bold border ${notification.isError ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+          {notification.isError ? <AlertTriangle size={16} /> : <CheckCircle size={16} />} {notification.text}
         </div>
       )}
 
@@ -375,7 +376,7 @@ export default function SimulacaoCompleta() {
 
 // Separate components for each step to keep the code manageable
 
-function StepPessoais({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
+export function StepPessoais({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
   return (
     <div className="space-y-6">
       <h2 className="text-sm font-bold text-[#004b8d] border-l-4 border-[#004b8d] pl-2.5 uppercase tracking-wider">
@@ -432,7 +433,7 @@ function StepPessoais({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: a
           />
         </div>
         <div className="space-y-1">
-          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">RG (Identidade Funcional)</label>
+          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">RG</label>
           <input
             type="text"
             value={sim.rg || ''}
@@ -456,7 +457,7 @@ function StepPessoais({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: a
   );
 }
 
-function StepCarreira({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
+export function StepCarreira({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
   const careers = getSavedCareerData();
   const careerOptions = Object.keys(careers);
 
@@ -488,7 +489,11 @@ function StepCarreira({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: a
           <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Plano de Carreira Selecionado</label>
           <select
             value={sim.selectedCareer || ''}
-            onChange={e => updateSim('selectedCareer', e.target.value)}
+            onChange={e => {
+              const nextCareer = e.target.value;
+              updateSim('selectedCareer', nextCareer);
+              updateSim('padrao', getPatternForCareer(nextCareer));
+            }}
             className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all capitalize"
           >
             <option value="">Selecione a Carreira...</option>
@@ -496,6 +501,16 @@ function StepCarreira({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: a
               <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>
             ))}
           </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Padrão do Cargo (Certidão)</label>
+          <input
+            type="text"
+            value={sim.padrao !== undefined && sim.padrao !== '' ? sim.padrao : getPatternForCareer(sim.selectedCareer || sim.cargo)}
+            onChange={e => updateSim('padrao', e.target.value)}
+            placeholder="Ex: 201"
+            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all"
+          />
         </div>
         <div className="space-y-1">
           <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Nível de Carreira</label>
@@ -528,7 +543,7 @@ function StepCarreira({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: a
   );
 }
 
-function StepGratificacoes({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
+export function StepGratificacoes({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
   const isEligible = true;
 
   const addStimulusRow = () => {
@@ -716,7 +731,7 @@ function StepGratificacoes({ sim, updateSim }: { sim: UnifiedSimulation, updateS
   );
 }
 
-function StepContribuicoes({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
+export function StepContribuicoes({ sim, updateSim, isUnified = false }: { sim: UnifiedSimulation; updateSim: any; isUnified?: boolean }) {
   const [calculatedRows, setCalculatedRows] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -809,7 +824,7 @@ function StepContribuicoes({ sim, updateSim }: { sim: UnifiedSimulation, updateS
   return (
     <div className="space-y-6">
       <h2 className="text-sm font-bold text-[#004b8d] border-l-4 border-[#004b8d] pl-2.5 uppercase tracking-wider">
-        Salários de Contribuição Históricos
+        {isUnified ? '2. Salários de Contribuição na CMC (Vínculo Atual)' : 'Salários de Contribuição Históricos'}
       </h2>
 
       {/* INSS Toggle for Wizard Step 4 */}
@@ -893,7 +908,7 @@ function StepContribuicoes({ sim, updateSim }: { sim: UnifiedSimulation, updateS
   );
 }
 
-function StepTempos({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any }) {
+export function StepTempos({ sim, updateSim, hideAfastamentos = false }: { sim: UnifiedSimulation; updateSim: any; hideAfastamentos?: boolean }) {
   const [expandedIndices, setExpandedIndices] = useState<Record<number, boolean>>(() => {
     // Expand the first card initially to provide immediate feedback
     return { 0: true };
@@ -1060,7 +1075,7 @@ function StepTempos({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any
   return (
     <div className="space-y-6">
       <h2 className="text-sm font-bold text-[#004b8d] border-l-4 border-[#004b8d] pl-2.5 uppercase tracking-wider block">
-        Averbações de Tempo de Serviço e Incorporações
+        {hideAfastamentos ? '1. Averbações de Tempo de Serviço e Incorporações' : 'Averbações de Tempo de Serviço e Incorporações'}
       </h2>
 
       <div className="space-y-4">
@@ -1534,9 +1549,156 @@ function StepTempos({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any
         )}
       </div>
 
-      <div className="pt-6 border-t border-gray-100">
-        <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider block mb-4">
-          Afastamentos e Extensão Profissional
+      {!hideAfastamentos && (
+        <div className="pt-6 border-t border-gray-100">
+          <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider block mb-4">
+            Afastamentos e Extensão Profissional
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Dias de Afastamento (Sem Contribuição)</label>
+              <input
+                type="number"
+                value={sim.diasAfastamento ?? 0}
+                onChange={e => updateSim('diasAfastamento', parseFloat(e.target.value) || 0)}
+                className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Extensão (Deseja trabalhar mais quantos meses?)</label>
+              <input
+                type="number"
+                value={sim.extensionMonths ?? 0}
+                onChange={e => updateSim('extensionMonths', parseFloat(e.target.value) || 0)}
+                className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function StepTemposEContribuicoes({ sim, updateSim }: { sim: UnifiedSimulation; updateSim: any }) {
+  const resumoCompetencias = React.useMemo(() => {
+    const mesesMap: { [key: string]: string } = {
+      jan: '01', fev: '02', mar: '03', abr: '04', mai: '05', jun: '06',
+      jul: '07', ago: '08', set: '09', out: '10', nov: '11', dez: '12'
+    };
+    const normalizar = (mesStr: string, anoStr: string) => {
+      let mes = mesStr.toLowerCase().trim();
+      mes = mesesMap[mes] ? mesesMap[mes] : mes.padStart(2, '0');
+      let ano = anoStr.trim();
+      if (ano.length === 2) {
+        ano = parseInt(ano, 10) >= 70 ? `19${ano}` : `20${ano}`;
+      }
+      return `${mes}/${ano}`;
+    };
+    const extrairCompetencias = (text: string) => {
+      const comps: string[] = [];
+      for (const raw of (text || '').split('\n')) {
+        const line = raw.trim();
+        if (!line) continue;
+        const mDia = line.match(/\b\d{1,2}[\/\-](\d{1,2}|[a-zA-Z]{3})[\/\-](\d{2}|\d{4})\b/);
+        const mMes = line.match(/\b(\d{1,2}|[a-zA-Z]{3})[\/\-](\d{2}|\d{4})\b/);
+        const mAno = line.match(/\b(\d{4})[\/\-](\d{1,2})\b/);
+        if (mDia) comps.push(normalizar(mDia[1], mDia[2]));
+        else if (mMes) comps.push(normalizar(mMes[1], mMes[2]));
+        else if (mAno) comps.push(normalizar(mAno[2], mAno[1]));
+      }
+      return comps;
+    };
+    const isPos94 = (comp: string) => {
+      const [m, y] = comp.split('/').map(Number);
+      if (!m || !y) return false;
+      return y > 1994 || (y === 1994 && m >= 7);
+    };
+
+    const cmcAll = extrairCompetencias(sim.historicalData || '');
+    const cmcPos94 = cmcAll.filter(isPos94);
+    const cmcSet = new Set<string>();
+    const duplicadas: string[] = [];
+
+    cmcPos94.forEach(c => {
+      if (cmcSet.has(c)) {
+        duplicadas.push(c);
+      }
+      cmcSet.add(c);
+    });
+
+    const incPos94: string[] = [];
+    const seenInc = new Set<string>();
+
+    (sim.incorporacoes || []).forEach(inc => {
+      if (inc.tipo === 'pre-1994' || inc.status === 'simular') return;
+      const comps = extrairCompetencias(typeof inc.valor === 'string' ? inc.valor : '').filter(isPos94);
+      comps.forEach(c => {
+        incPos94.push(c);
+        if (cmcSet.has(c) || seenInc.has(c)) {
+          duplicadas.push(c);
+        }
+        seenInc.add(c);
+      });
+    });
+
+    return {
+      cmcCount: cmcPos94.length,
+      incCount: incPos94.length,
+      totalCount: cmcPos94.length + incPos94.length,
+      duplicadas: Array.from(new Set(duplicadas))
+    };
+  }, [sim.historicalData, sim.incorporacoes]);
+
+  return (
+    <div className="space-y-8">
+      {/* 1º Bloco: Averbações e Incorporações (cronologicamente anteriores) */}
+      <StepTempos sim={sim} updateSim={updateSim} hideAfastamentos={true} />
+
+      {/* 2º Bloco: Salários de Contribuição na CMC */}
+      <div className="pt-6 border-t border-gray-200">
+        <StepContribuicoes sim={sim} updateSim={updateSim} isUnified={true} />
+      </div>
+
+      {/* Painel Consolidado de Competências + Alerta de Duplicidade */}
+      <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-4 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <span className="text-xs font-extrabold text-[#002f5a] uppercase tracking-wider">
+            Conferência Consolidada de Contribuições (Pós-07/1994)
+          </span>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="px-2.5 py-1 bg-white border border-blue-200 rounded-lg font-semibold text-gray-700">
+              Averbações Efetivadas: <strong className="text-[#004b8d]">{resumoCompetencias.incCount}</strong>
+            </span>
+            <span className="px-2.5 py-1 bg-white border border-blue-200 rounded-lg font-semibold text-gray-700">
+              Ficha CMC: <strong className="text-[#004b8d]">{resumoCompetencias.cmcCount}</strong>
+            </span>
+            <span className="px-2.5 py-1 bg-[#002f5a] text-white rounded-lg font-bold">
+              Total na Média: {resumoCompetencias.totalCount} competências
+            </span>
+          </div>
+        </div>
+
+        {resumoCompetencias.duplicadas.length > 0 && (
+          <div className="bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3 text-xs flex items-start gap-2">
+            <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <strong>Atenção — Competências sobrepostas/duplicadas detectadas:</strong>{' '}
+              Os seguintes meses aparecem em mais de uma ficha (ex.: CMC e averbação externa):{' '}
+              <span className="font-mono font-bold">
+                {resumoCompetencias.duplicadas.slice(0, 12).join(', ')}
+                {resumoCompetencias.duplicadas.length > 12 ? ` (+${resumoCompetencias.duplicadas.length - 12})` : ''}
+              </span>
+              . Verifique para evitar contagem dupla na média salarial.
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 3º Bloco: Afastamentos e Extensão */}
+      <div className="pt-6 border-t border-gray-200">
+        <h3 className="text-xs font-bold text-[#004b8d] border-l-4 border-[#004b8d] pl-2.5 uppercase tracking-wider block mb-4">
+          3. Afastamentos e Extensão Profissional
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-1">
@@ -1563,9 +1725,9 @@ function StepTempos({ sim, updateSim }: { sim: UnifiedSimulation, updateSim: any
   );
 }
 
-function StepGerar({ sim }: { sim: UnifiedSimulation }) {
+export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimulation; initialShowReport?: boolean }) {
   const [opts, setOpts] = useState({ regras: true, proventos: true, ge: true });
-  const [showReport, setShowReport] = useState(false);
+  const [showReport, setShowReport] = useState(initialShowReport);
   const [notification, setNotification] = useState('');
 
   // Estados e controle de certidões emitidas no StepGerar
@@ -1574,6 +1736,7 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
   const [numeroOficialInput, setNumeroOficialInput] = useState('');
   const [showHistoricoModal, setShowHistoricoModal] = useState(false);
   const [historicoCertidoes, setHistoricoCertidoes] = useState<CertidaoEmitida[]>([]);
+  const [confirmDeleteCertId, setConfirmDeleteCertId] = useState<string | null>(null);
 
   const carregarHistorico = () => {
     setHistoricoCertidoes(getCertidoesEmitidas());
@@ -2810,41 +2973,10 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
     return (
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 print:hidden">
-          <button onClick={() => setShowReport(false)} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 transition-all font-bold self-start sm:self-auto"> Voltar</button>
+          <button onClick={() => setShowReport(false)} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 transition-all font-bold self-start sm:self-auto cursor-pointer">
+            <ChevronLeft size={16} /> {initialShowReport ? 'Selecionar Módulos' : 'Voltar'}
+          </button>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Botão para Certidão de Simulação (sem controle numérico) */}
-            <button 
-              type="button"
-              className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold py-2 px-3.5 rounded-lg transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer" 
-              onClick={handleGerarCertidaoSimulacao}
-              title="Gerar Certidão de Simulação em PDF (sem controle numérico)"
-            >
-              <FileCheck size={14} /> Certidão de Simulação (PDF)
-            </button>
-
-            {/* Botão para Certidão Oficial com número */}
-            <button 
-              type="button"
-              className="bg-[#002f5a] hover:bg-[#004b8d] text-white font-extrabold py-2 px-3.5 rounded-lg transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
-              onClick={handleAbrirModalOficial}
-              title="Emitir Certidão Oficial DGEP com número sequencial"
-            >
-              <Award size={14} /> Emitir Certidão Oficial
-            </button>
-
-            {/* Controle de Certidões */}
-            <button 
-              type="button"
-              className="bg-slate-700 hover:bg-slate-800 text-white font-bold py-2 px-3.5 rounded-lg transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
-              onClick={() => {
-                carregarHistorico();
-                setShowHistoricoModal(true);
-              }}
-              title="Ver histórico e controle de certidões emitidas"
-            >
-              <History size={14} /> Controle de Certidões ({historicoCertidoes.length})
-            </button>
-
             <button 
               className="bg-emerald-600 text-white font-extrabold py-2 px-3.5 rounded-lg hover:bg-emerald-700 transition-all uppercase tracking-wide text-xs flex items-center gap-1.5 shadow-sm cursor-pointer" 
               onClick={() => {
@@ -3821,45 +3953,6 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
         </label>
       </div>
 
-      {/* Opção Rápida de Emissão de Certidão na Etapa 6 */}
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 p-4 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
-        <div>
-          <span className="text-xs font-bold text-[#002f5a] uppercase flex items-center gap-1.5">
-            <Award size={15} className="text-[#004b8d]" />
-            Emissão Direta da Certidão de Aposentadoria
-          </span>
-          <p className="text-xs text-gray-600 mt-0.5">
-            Você pode gerar diretamente a <strong>Certidão de Simulação</strong> (sem número) ou a <strong>Certidão Oficial</strong> com os dados atuais deste servidor.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-          <button
-            type="button"
-            onClick={handleGerarCertidaoSimulacao}
-            className="flex-1 sm:flex-initial px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-            title="Gerar Certidão de Simulação em PDF sem número oficial"
-          >
-            <FileCheck size={14} /> Certidão de Simulação
-          </button>
-          <button
-            type="button"
-            onClick={handleAbrirModalOficial}
-            className="flex-1 sm:flex-initial px-3.5 py-2 bg-[#002f5a] hover:bg-[#004b8d] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-            title="Emitir Certidão Oficial de Aposentadoria com número sequencial DGEP"
-          >
-            <Award size={14} /> Oficial Aposentadoria
-          </button>
-          <button
-            type="button"
-            onClick={handleAbrirModalAbonoOficial}
-            className="flex-1 sm:flex-initial px-3.5 py-2 bg-[#581c87] hover:bg-[#4c1d95] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
-            title="Emitir Certidão Oficial de Abono de Permanência com numeração DGEP"
-          >
-            <Award size={14} /> Oficial Abono de Permanência
-          </button>
-        </div>
-      </div>
-
       <div className="pt-4 flex flex-col sm:flex-row gap-4">
         <button className="flex-1 bg-emerald-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-emerald-700 transition-all shadow-md uppercase tracking-wide flex justify-center items-center gap-2 cursor-pointer" onClick={() => setShowReport(true)}>Gerar Relatório Integrado</button>
       </div>
@@ -4042,26 +4135,45 @@ function StepGerar({ sim }: { sim: UnifiedSimulation }) {
                             gerarCertidaoAposentadoriaPadraoPDF(item.snapshot);
                             showNotification(`Certidão (${item.numeroCertidao}) baixada novamente!`);
                           } catch (e) {
-                            alert('Erro ao gerar o PDF');
+                            showNotification('Erro ao gerar o PDF da certidão.');
                           }
                         }}
                         className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-[#004b8d] rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
                       >
                         <Download size={13} /> Baixar PDF
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (confirm(`Excluir registro da certidão ${item.numeroCertidao} do servidor ${item.servidorNome}?`)) {
-                            excluirCertidaoEmitida(item.id);
-                            carregarHistorico();
-                          }
-                        }}
-                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer transition-colors"
-                        title="Excluir do histórico"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      {confirmDeleteCertId === item.id ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              excluirCertidaoEmitida(item.id);
+                              setConfirmDeleteCertId(null);
+                              carregarHistorico();
+                              showNotification('Registro de certidão removido.');
+                            }}
+                            className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[11px] font-bold cursor-pointer"
+                          >
+                            Confirmar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteCertId(null)}
+                            className="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-[11px] font-bold cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteCertId(item.id)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer transition-colors"
+                          title="Excluir do histórico"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))

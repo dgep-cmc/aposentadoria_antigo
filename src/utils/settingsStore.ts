@@ -1,5 +1,7 @@
 import { 
   careerData as defaultCareerData, 
+  careerDefaultPatterns as defaultCareerPatterns,
+  resolveCareerPattern,
   fgValues as defaultFGValues,
   SALARY_CAP_GENERAL,
   SALARY_CAP_PROCURADOR 
@@ -11,6 +13,7 @@ import {
 } from './firebase';
 
 const CAREERS_CACHE_KEY = 'dgep_custom_career_data';
+const CAREER_PATTERNS_CACHE_KEY = 'dgep_custom_career_patterns';
 const FG_CACHE_KEY = 'dgep_custom_fg_values';
 const INSS_FATORES_CACHE_KEY = 'dgep_custom_inss_fatores';
 const SALARY_CAPS_CACHE_KEY = 'dgep_custom_salary_caps';
@@ -27,6 +30,10 @@ export interface CareerDataType {
   [careerKey: string]: {
     [band: string]: number;
   };
+}
+
+export interface CareerPatternMap {
+  [careerKey: string]: string;
 }
 
 export interface FatoresINSSData {
@@ -70,11 +77,13 @@ function getSafeApiUrl(path: string): string {
 let settingsCache: {
   fatoresINSS: FatoresINSSData;
   careers: CareerDataType;
+  careerPatterns: CareerPatternMap;
   fgs: FGValuesType;
   salaryCaps: SalaryCapType;
 } = {
   fatoresINSS: defaultFatoresINSS,
   careers: defaultCareerData,
+  careerPatterns: { ...defaultCareerPatterns },
   fgs: defaultFGValues as FGValuesType,
   salaryCaps: defaultSalaryCap
 };
@@ -83,6 +92,7 @@ let settingsCache: {
 async function persistSettings() {
   try {
     localStorage.setItem(CAREERS_CACHE_KEY, JSON.stringify(settingsCache.careers));
+    localStorage.setItem(CAREER_PATTERNS_CACHE_KEY, JSON.stringify(settingsCache.careerPatterns));
     localStorage.setItem(FG_CACHE_KEY, JSON.stringify(settingsCache.fgs));
     localStorage.setItem(INSS_FATORES_CACHE_KEY, JSON.stringify(settingsCache.fatoresINSS));
     localStorage.setItem(SALARY_CAPS_CACHE_KEY, JSON.stringify(settingsCache.salaryCaps));
@@ -117,6 +127,11 @@ export async function loadSettingsFromServer(): Promise<void> {
   try {
     const localCareers = localStorage.getItem(CAREERS_CACHE_KEY);
     if (localCareers) settingsCache.careers = JSON.parse(localCareers);
+
+    const localCareerPatterns = localStorage.getItem(CAREER_PATTERNS_CACHE_KEY);
+    if (localCareerPatterns) {
+      settingsCache.careerPatterns = { ...defaultCareerPatterns, ...JSON.parse(localCareerPatterns) };
+    }
     
     const localFGs = localStorage.getItem(FG_CACHE_KEY);
     if (localFGs) settingsCache.fgs = JSON.parse(localFGs);
@@ -142,6 +157,10 @@ export async function loadSettingsFromServer(): Promise<void> {
         if (fsSettings.careers && Object.keys(fsSettings.careers).length > 0) {
           settingsCache.careers = fsSettings.careers;
           localStorage.setItem(CAREERS_CACHE_KEY, JSON.stringify(fsSettings.careers));
+        }
+        if (fsSettings.careerPatterns && Object.keys(fsSettings.careerPatterns).length > 0) {
+          settingsCache.careerPatterns = { ...defaultCareerPatterns, ...fsSettings.careerPatterns };
+          localStorage.setItem(CAREER_PATTERNS_CACHE_KEY, JSON.stringify(settingsCache.careerPatterns));
         }
         if (fsSettings.fgs && fsSettings.fgs.FG4 > 0) {
           settingsCache.fgs = fsSettings.fgs;
@@ -178,6 +197,13 @@ export async function loadSettingsFromServer(): Promise<void> {
         settingsCache.careers = data.careers;
         localStorage.setItem(CAREERS_CACHE_KEY, JSON.stringify(data.careers));
       } else if (Object.keys(settingsCache.careers).length > 0) {
+        needsUpload = true;
+      }
+
+      if (data.careerPatterns && Object.keys(data.careerPatterns).length > 0) {
+        settingsCache.careerPatterns = { ...defaultCareerPatterns, ...data.careerPatterns };
+        localStorage.setItem(CAREER_PATTERNS_CACHE_KEY, JSON.stringify(settingsCache.careerPatterns));
+      } else {
         needsUpload = true;
       }
       
@@ -217,6 +243,22 @@ export function getSavedCareerData(): CareerDataType {
 export function saveCareerData(data: CareerDataType): void {
   settingsCache.careers = data;
   persistSettings();
+}
+
+// Get helper for Career Patterns (Padrão por Cargo)
+export function getSavedCareerPatterns(): CareerPatternMap {
+  return settingsCache.careerPatterns || { ...defaultCareerPatterns };
+}
+
+// Save helper for Career Patterns (Padrão por Cargo)
+export function saveCareerPatterns(patterns: CareerPatternMap): void {
+  settingsCache.careerPatterns = patterns;
+  persistSettings();
+}
+
+// Resolve Padrão by career key or cargo display name
+export function getPatternForCareer(careerOrCargo?: string): string {
+  return resolveCareerPattern(careerOrCargo, getSavedCareerPatterns());
 }
 
 // Get helper for FG values
@@ -263,6 +305,7 @@ export function saveSalaryCaps(values: SalaryCapType): void {
 // Reset all values to initial defaults from careers.ts (but keep Fatores de Conversão intact)
 export function resetSettingsToDefaults(): void {
   settingsCache.careers = defaultCareerData;
+  settingsCache.careerPatterns = { ...defaultCareerPatterns };
   settingsCache.fgs = defaultFGValues as FGValuesType;
   settingsCache.salaryCaps = defaultSalaryCap;
   persistSettings();

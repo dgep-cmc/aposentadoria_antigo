@@ -17,16 +17,26 @@ import {
   History,
   Trash2,
   Search,
-  Filter
+  Filter,
+  Save
 } from 'lucide-react';
 import { CertidaoData, gerarCertidaoAposentadoriaPadraoPDF } from '../utils/exportCertidaoPDF';
-import { getSavedSimulations, getDraftSimulation, UnifiedSimulation } from '../utils/simulationsStore';
-import { construirCertidaoAPartirDeSimulacao } from '../utils/certidaoBuilder';
+import { 
+  getSavedSimulations, 
+  getDraftSimulation, 
+  saveDraftSimulation, 
+  saveSimulation, 
+  UnifiedSimulation 
+} from '../utils/simulationsStore';
+import { construirCertidaoAPartirDeSimulacao, extrairTemposIncorporacoes } from '../utils/certidaoBuilder';
+import { getPatternForCareer } from '../utils/settingsStore';
 import { 
   CertidaoEmitida, 
   getCertidoesEmitidas, 
   salvarCertidaoEmitida, 
-  excluirCertidaoEmitida 
+  excluirCertidaoEmitida,
+  getProximoNumeroOficial,
+  consumirProximoNumeroOficial
 } from '../utils/certidoesEmitidasStore';
 
 // Dados de Exemplo fiéis ao anexo oficial da Certidão nº 03/2026 (Valdemir Anselmo Pontes)
@@ -181,7 +191,7 @@ export const getCertidaoInicialVazia = (): CertidaoData => {
       idadeEm31Dez2021: 0,
       orgao: 'Câmara Municipal de Curitiba',
       cargo: '',
-      padrao: '306',
+      padrao: '',
       referencia: 'I',
       dataAdmissaoServicoPublico: '',
       dataAdmissaoEstatutario: '',
@@ -227,18 +237,54 @@ export const getCertidaoInicialVazia = (): CertidaoData => {
   };
 };
 
-export default function GeradorCertidao() {
+const CERTIDAO_DRAFT_KEY = 'dgep_certidao_draft_v1';
+
+interface CertidaoDraftEnvelope {
+  selectedSimId: string;
+  linkedSimId?: string;
+  linkedSimUpdatedAt?: string;
+  hasManualEdits?: boolean;
+  certidaoData: CertidaoData;
+  updatedAt: string;
+}
+
+const brToIsoDate = (brDate?: string): string | undefined => {
+  if (!brDate) return undefined;
+  const trimmed = brDate.trim();
+  const match = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (match) {
+    return `${match[3]}-${match[2]}-${match[1]}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return undefined;
+};
+
+interface GeradorCertidaoProps {
+  externalSim?: UnifiedSimulation;
+  onSyncSim?: (updatedSim: UnifiedSimulation) => void;
+  embedded?: boolean;
+}
+
+export default function GeradorCertidao({ externalSim, onSyncSim, embedded = false }: GeradorCertidaoProps = {}) {
   const [certidaoData, setCertidaoData] = useState<CertidaoData>(getCertidaoInicialVazia());
   const [activeTab, setActiveTab] = useState<'servidor' | 'grade' | 'regras' | 'lavratura' | 'preview' | 'historico'>('preview');
   const [savedSimulations, setSavedSimulations] = useState<UnifiedSimulation[]>([]);
   const [draftSimulation, setDraftSimulation] = useState<UnifiedSimulation | null>(null);
-  const [selectedSimId, setSelectedSimId] = useState<string>('');
-  const [mensagemSucesso, setMensagemSucesso] = useState<string | null>(null);
+  const [selectedSimId, setSelectedSimId] = useState<string>(externalSim?.id || '');
+  const [mensagemSucesso, setMensagemSucesso] = useState<{ text: string; isError?: boolean } | null>(null);
+  const [isSavingIdentificacao, setIsSavingIdentificacao] = useState(false);
+  const isInitializedRef = React.useRef(false);
+  const linkedSimMetaRef = React.useRef<{ id?: string; updatedAt?: string }>({});
+  const hasManualEditsRef = React.useRef(false);
 
   // Estado do Controle de Certidões Emitidas
   const [historicoCertidoes, setHistoricoCertidoes] = useState<CertidaoEmitida[]>([]);
   const [filtroHistorico, setFiltroHistorico] = useState<'todas' | 'oficial' | 'simulacao'>('todas');
   const [buscaHistorico, setBuscaHistorico] = useState<string>('');
+  const [somenteServidorAtual, setSomenteServidorAtual] = useState<boolean>(Boolean(externalSim));
+  const [deleteHistTarget, setDeleteHistTarget] = useState<CertidaoEmitida | null>(null);
 
   const carregarHistorico = () => {
     setHistoricoCertidoes(getCertidoesEmitidas());
@@ -246,7 +292,13 @@ export default function GeradorCertidao() {
 
   useEffect(() => {
     carregarHistorico();
-    // Carregar simulações salvas e vincular automaticamente à simulação realizada no sistema
+    if (externalSim) {
+      setDraftSimulation(externalSim);
+      handleImportarSimulacao(externalSim.id, externalSim, true);
+      isInitializedRef.current = true;
+      return;
+    }
+    // Carregar simulações salvas e vincular automaticamente à simulação ou restaurar rascunho da certidão
     const loadData = async () => {
       let draft: UnifiedSimulation | null = null;
       let list: UnifiedSimulation[] = [];
@@ -265,39 +317,228 @@ export default function GeradorCertidao() {
         console.error('Erro ao carregar simulações salvas:', e);
       }
 
+      // Verificar se existe rascunho salvo localmente da própria Certidão
+      let savedCertidaoDraft: CertidaoDraftEnvelope | null = null;
+      try {
+        const raw = localStorage.getItem(CERTIDAO_DRAFT_KEY);
+        if (raw) {
+          savedCertidaoDraft = JSON.parse(raw);
+        }
+      } catch (e) {
+        console.error('Erro ao ler rascunho da certidão:', e);
+      }
+
+      const activeDraftHasData = !!(draft && (draft.nome || draft.matricula || draft.ingressoCmc || draft.rg || draft.cpf || draft.dataNascimento));
+      const activeTargetSim = activeDraftHasData ? draft : (list.length > 0 ? list[0] : null);
+      const activeTargetId = activeDraftHasData ? 'draft' : (list.length > 0 ? list[0].id : '');
+
+      // Restaurar rascunho manual da certidão apenas se houver edições manuais locais E a simulação vinculada não tiver sido alterada depois
+      if (savedCertidaoDraft && savedCertidaoDraft.certidaoData && savedCertidaoDraft.hasManualEdits) {
+        const isStaticSelection = savedCertidaoDraft.selectedSimId === 'blank' || savedCertidaoDraft.selectedSimId === 'exemplo_valdemir';
+        const sameSim = isStaticSelection || !activeTargetSim || (savedCertidaoDraft.linkedSimId === activeTargetSim.id);
+        const simTime = activeTargetSim?.updatedAt ? new Date(activeTargetSim.updatedAt).getTime() : 0;
+        const linkedTime = savedCertidaoDraft.linkedSimUpdatedAt ? new Date(savedCertidaoDraft.linkedSimUpdatedAt).getTime() : 0;
+        const draftTime = savedCertidaoDraft.updatedAt ? new Date(savedCertidaoDraft.updatedAt).getTime() : 0;
+        const simUpdatedAfterCertidao = simTime > Math.max(linkedTime, draftTime);
+
+        if (sameSim && !simUpdatedAfterCertidao) {
+          let restoredData = savedCertidaoDraft.certidaoData;
+          // Preenche eventuais campos vazios com dados da simulação vinculada
+          if (!isStaticSelection && activeTargetSim) {
+            const toBr = (d?: string) => {
+              if (!d) return '';
+              const clean = d.split('T')[0];
+              const p = clean.split('-');
+              return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : clean;
+            };
+            const s = restoredData.servidor;
+            restoredData = {
+              ...restoredData,
+              servidor: {
+                ...s,
+                nome: s.nome || activeTargetSim.nome || '',
+                matricula: s.matricula || activeTargetSim.matricula || '',
+                rg: s.rg || activeTargetSim.rg || '',
+                cpf: s.cpf || activeTargetSim.cpf || '',
+                dataNascimento: s.dataNascimento || toBr(activeTargetSim.dataNascimento) || '',
+                cargo: s.cargo || (activeTargetSim.cargo || activeTargetSim.selectedCareer || '').replace(/_/g, ' '),
+                padrao: s.padrao || activeTargetSim.padrao || getPatternForCareer(activeTargetSim.selectedCareer || activeTargetSim.cargo) || '',
+                referencia: s.referencia || activeTargetSim.referencia || activeTargetSim.selectedLevel || 'I',
+                dataAdmissaoServicoPublico: s.dataAdmissaoServicoPublico || toBr(activeTargetSim.ingressoCmc || activeTargetSim.ingressoCargoAtual),
+                dataAdmissaoEstatutario: s.dataAdmissaoEstatutario || toBr(activeTargetSim.ingressoCargoAtual || activeTargetSim.ingressoCmc),
+                registroTribunalContas: s.registroTribunalContas || activeTargetSim.registroTribunalContas || ''
+              }
+            };
+          }
+          hasManualEditsRef.current = true;
+          setCertidaoData(restoredData);
+          setSelectedSimId(savedCertidaoDraft.selectedSimId || activeTargetId);
+          linkedSimMetaRef.current = {
+            id: savedCertidaoDraft.linkedSimId,
+            updatedAt: savedCertidaoDraft.linkedSimUpdatedAt
+          };
+          isInitializedRef.current = true;
+          return;
+        }
+      }
+
       // VINCULAÇÃO AUTOMÁTICA COM A SIMULAÇÃO DO SISTEMA:
-      // 1. Prioridade: Rascunho da Simulação Integrada em andamento
-      if (draft && (draft.nome || draft.matricula || draft.ingressoCmc)) {
+      if (activeDraftHasData && draft) {
         handleImportarSimulacao('draft', draft, true);
-      } 
-      // 2. Ou para a simulação salva no histórico
-      else if (list.length > 0) {
+      } else if (list.length > 0) {
         handleImportarSimulacao(list[0].id, list[0], true);
       }
+      isInitializedRef.current = true;
     };
     loadData();
   }, []);
 
-  const triggerFeedback = (msg: string) => {
-    setMensagemSucesso(msg);
+  // Re-sincroniza automaticamente quando o cadastro externo do servidor mudar
+  useEffect(() => {
+    if (!externalSim) return;
+    if (
+      linkedSimMetaRef.current.id !== externalSim.id ||
+      linkedSimMetaRef.current.updatedAt !== externalSim.updatedAt
+    ) {
+      setDraftSimulation(externalSim);
+      handleImportarSimulacao(externalSim.id, externalSim, true);
+    }
+  }, [externalSim]);
+
+  // Persistir automaticamente edições feitas na certidão (incluindo aba Identificação Funcional e TCE-PR)
+  useEffect(() => {
+    if (!isInitializedRef.current || externalSim) return;
+    try {
+      const envelope: CertidaoDraftEnvelope = {
+        selectedSimId,
+        linkedSimId: linkedSimMetaRef.current.id,
+        linkedSimUpdatedAt: linkedSimMetaRef.current.updatedAt,
+        hasManualEdits: hasManualEditsRef.current,
+        certidaoData,
+        updatedAt: new Date().toISOString()
+      };
+      localStorage.setItem(CERTIDAO_DRAFT_KEY, JSON.stringify(envelope));
+    } catch (e) {
+      console.error('Erro ao persistir rascunho da certidão:', e);
+    }
+  }, [certidaoData, selectedSimId, externalSim]);
+
+  const triggerFeedback = (msg: string, isError = false) => {
+    setMensagemSucesso({ text: msg, isError });
     setTimeout(() => setMensagemSucesso(null), 4500);
   };
 
   const handleCarregarExemplo = () => {
+    hasManualEditsRef.current = true;
+    linkedSimMetaRef.current = { id: 'exemplo_valdemir', updatedAt: undefined };
+    setSelectedSimId('exemplo_valdemir');
     setCertidaoData(DADOS_EXEMPLO_VALDEMIR);
     triggerFeedback('Dados modelo da Certidão nº 03/2026 (Valdemir Pontes) carregados!');
   };
 
+  // Salva as alterações da aba Identificação Funcional & TCE-PR na certidão e na simulação vinculada
+  const handleSalvarDadosIdentificacao = async () => {
+    setIsSavingIdentificacao(true);
+    try {
+      const s = certidaoData.servidor;
+      const sexoSim: 'M' | 'F' | '' =
+        s.sexo === 'Feminino' ? 'F' : s.sexo === 'Masculino' ? 'M' : '';
+      const isoNasc = brToIsoDate(s.dataNascimento);
+      const isoAdmSP = brToIsoDate(s.dataAdmissaoServicoPublico);
+      const isoAdmEst = brToIsoDate(s.dataAdmissaoEstatutario);
+
+      const applyFieldsToSim = (baseSim: UnifiedSimulation): UnifiedSimulation => ({
+        ...baseSim,
+        nome: s.nome ?? baseSim.nome,
+        matricula: s.matricula ?? baseSim.matricula,
+        rg: s.rg ?? '',
+        cpf: s.cpf ?? '',
+        sexo: sexoSim || baseSim.sexo,
+        dataNascimento: isoNasc || baseSim.dataNascimento,
+        cargo: s.cargo ?? baseSim.cargo,
+        padrao: s.padrao ?? baseSim.padrao,
+        referencia: s.referencia ?? baseSim.referencia,
+        ingressoCmc: isoAdmSP || baseSim.ingressoCmc,
+        ingressoCargoAtual: isoAdmEst || baseSim.ingressoCargoAtual,
+        registroTribunalContas: s.registroTribunalContas ?? '',
+        updatedAt: new Date().toISOString()
+      });
+
+      let targetSim: UnifiedSimulation | undefined;
+      if (externalSim) {
+        targetSim = externalSim;
+      } else if (selectedSimId === 'draft') {
+        targetSim = getDraftSimulation() || draftSimulation || undefined;
+      } else if (selectedSimId && selectedSimId !== 'blank' && selectedSimId !== 'exemplo_valdemir') {
+        targetSim = savedSimulations.find(item => item.id === selectedSimId);
+      }
+
+      hasManualEditsRef.current = true;
+
+      if (targetSim) {
+        const updatedSim = applyFieldsToSim(targetSim);
+        linkedSimMetaRef.current = { id: updatedSim.id, updatedAt: updatedSim.updatedAt };
+
+        if (onSyncSim) {
+          onSyncSim(updatedSim);
+        }
+
+        // Atualiza rascunho ativo se for o mesmo registro ou estiver vinculado ao draft
+        if (externalSim || selectedSimId === 'draft' || (draftSimulation && draftSimulation.id === updatedSim.id)) {
+          saveDraftSimulation(updatedSim);
+          setDraftSimulation(updatedSim);
+        }
+
+        // Atualiza no histórico salvo (Firestore / API / localStorage) sempre que o ID existir nas simulações salvas ou tiver sido selecionado do histórico
+        const existsInSaved = savedSimulations.some(item => item.id === updatedSim.id);
+        if (externalSim || selectedSimId !== 'draft' || existsInSaved) {
+          await saveSimulation(updatedSim);
+          setSavedSimulations(prev => {
+            const idx = prev.findIndex(item => item.id === updatedSim.id);
+            if (idx >= 0) {
+              const copy = [...prev];
+              copy[idx] = updatedSim;
+              return copy;
+            }
+            return [updatedSim, ...prev];
+          });
+        }
+        const envelope: CertidaoDraftEnvelope = {
+          selectedSimId,
+          linkedSimId: updatedSim.id,
+          linkedSimUpdatedAt: updatedSim.updatedAt,
+          hasManualEdits: true,
+          certidaoData,
+          updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem(CERTIDAO_DRAFT_KEY, JSON.stringify(envelope));
+        triggerFeedback('Dados de Identificação Funcional e TCE-PR salvos com sucesso na simulação!');
+      } else {
+        // Sem simulação vinculada (ex: Edição Manual), salva rascunho local da certidão
+        const envelope: CertidaoDraftEnvelope = {
+          selectedSimId: selectedSimId || 'blank',
+          linkedSimId: linkedSimMetaRef.current.id,
+          linkedSimUpdatedAt: linkedSimMetaRef.current.updatedAt,
+          hasManualEdits: true,
+          certidaoData,
+          updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem(CERTIDAO_DRAFT_KEY, JSON.stringify(envelope));
+        triggerFeedback('Dados da certidão salvos localmente com sucesso!');
+      }
+    } catch (e) {
+      console.error('Erro ao salvar identificação funcional e TCE-PR:', e);
+      triggerFeedback('Erro ao salvar dados no servidor/banco de dados. Verifique a conexão e tente novamente.', true);
+    } finally {
+      setIsSavingIdentificacao(false);
+    }
+  };
+
   // Gerador automatizado da numeração da certidão
   const gerarProximoNumero = () => {
-    const anoAtual = new Date().getFullYear();
-    const storageKey = `dgep_certidao_seq_${anoAtual}`;
-    const savedSeq = localStorage.getItem(storageKey);
-    let nextNum = savedSeq ? parseInt(savedSeq, 10) + 1 : 4; // Inicializa em 04/2026 pois o exemplo oficial é 03/2026
-    if (isNaN(nextNum) || nextNum < 1) nextNum = 1;
-    localStorage.setItem(storageKey, String(nextNum));
-    const novoNumero = `${String(nextNum).padStart(2, '0')}/${anoAtual}`;
-    setCertidaoData(prev => ({ ...prev, numeroCertidao: novoNumero }));
+    const novoNumero = consumirProximoNumeroOficial();
+    hasManualEditsRef.current = true;
+    setCertidaoData(prev => ({ ...prev, numeroCertidao: novoNumero, isSimulacao: false }));
     triggerFeedback(`Novo número sequencial da certidão gerado: ${novoNumero}`);
   };
 
@@ -344,14 +585,15 @@ export default function GeradorCertidao() {
 
   // Importação e vínculo automatizado com os dados da Simulação
   function handleImportarSimulacao(id: string, directSim?: UnifiedSimulation, silenciarFeedback = false) {
-    const sim = directSim || (id === 'draft' ? draftSimulation : savedSimulations.find(s => s.id === id));
+    const sim = directSim || (id === 'draft' ? (getDraftSimulation() || draftSimulation) : savedSimulations.find(s => s.id === id));
     if (!sim) return;
 
     const formatBR = (dateStr?: string) => {
       if (!dateStr) return '';
-      const parts = dateStr.split('-');
+      const clean = dateStr.split('T')[0].trim();
+      const parts = clean.split('-');
       if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-      return dateStr;
+      return clean;
     };
 
     const parseDate = (dateStr?: string): Date | null => {
@@ -404,30 +646,16 @@ export default function GeradorCertidao() {
       : 0;
     const diferencaDias = Math.max(0, diasCMC - diasAte31Dez2021);
 
+    const incs = extrairTemposIncorporacoes(sim.incorporacoes, true);
+
     // 3. Tempo Fícto (licenças-prêmio incorporadas – CMC)
-    let diasFicto = 0;
-    const fictas = (sim.incorporacoes || []).filter(inc => {
-      const t = (inc.tipo || '').toLowerCase();
-      const n = (inc.nome || '').toLowerCase();
-      return t.includes('licenca') || t.includes('licença') || t.includes('premio') || t.includes('prêmio') || t.includes('ficto') || t.includes('fícto') || n.includes('licença') || n.includes('premio');
-    });
-    if (fictas.length > 0) {
-      diasFicto = fictas.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-    }
+    const diasFicto = incs.diasFicto;
     const anosFicto = Math.floor(diasFicto / 365);
     const mesesFicto = Math.floor((diasFicto % 365) / 30);
     const diasRestFicto = (diasFicto % 365) % 30;
 
     // 4. Tempo de Serviço Público Municipal (Recibado)
-    let diasRecibado = 0;
-    const recibados = (sim.incorporacoes || []).filter(inc => {
-      const t = (inc.tipo || '').toLowerCase();
-      const n = (inc.nome || '').toLowerCase();
-      return t.includes('recibado') || n.includes('recibado');
-    });
-    if (recibados.length > 0) {
-      diasRecibado = recibados.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-    }
+    const diasRecibado = incs.diasRecibado;
     const anosRecibado = Math.floor(diasRecibado / 365);
     const mesesRecibado = Math.floor((diasRecibado % 365) / 30);
     const diasRestRecibado = (diasRecibado % 365) % 30;
@@ -452,29 +680,13 @@ export default function GeradorCertidao() {
     const diasRestCLT = (diasCLT % 365) % 30;
 
     // 5b. Outras incorporações de Tempo de Serviço Público (Estatutário)
-    let diasOutrasEst = 0;
-    const outrasEst = (sim.incorporacoes || []).filter(inc => {
-      const t = (inc.tipo || '').toLowerCase();
-      const n = (inc.nome || '').toLowerCase();
-      return (t.includes('estatut') || n.includes('estatut')) && !t.includes('cmc') && !n.includes('cmc');
-    });
-    if (outrasEst.length > 0) {
-      diasOutrasEst = outrasEst.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-    }
+    const diasOutrasEst = incs.diasOutrasEst;
     const anosOutrasEst = Math.floor(diasOutrasEst / 365);
     const mesesOutrasEst = Math.floor((diasOutrasEst % 365) / 30);
     const diasRestOutrasEst = (diasOutrasEst % 365) % 30;
 
     // 5c. Outras incorporações de Tempo de Serviço Público (CLT)
-    let diasOutrasCLT = 0;
-    const outrasCLT = (sim.incorporacoes || []).filter(inc => {
-      const t = (inc.tipo || '').toLowerCase();
-      const n = (inc.nome || '').toLowerCase();
-      return (t.includes('clt') || n.includes('clt')) && !t.includes('municipal') && !n.includes('municipal');
-    });
-    if (outrasCLT.length > 0) {
-      diasOutrasCLT = outrasCLT.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-    }
+    const diasOutrasCLT = incs.diasOutrasCLT;
     const anosOutrasCLT = Math.floor(diasOutrasCLT / 365);
     const mesesOutrasCLT = Math.floor((diasOutrasCLT % 365) / 30);
     const diasRestOutrasCLT = (diasOutrasCLT % 365) % 30;
@@ -486,15 +698,7 @@ export default function GeradorCertidao() {
     const diasRestAfastamento = (diasAfastamento % 365) % 30;
 
     // 5e. Penalidades Administrativas, suspensão e faltas
-    let diasPenalidades = 0;
-    const penalidades = (sim.incorporacoes || []).filter(inc => {
-      const t = (inc.tipo || '').toLowerCase();
-      const n = (inc.nome || '').toLowerCase();
-      return t.includes('falta') || t.includes('suspens') || t.includes('penalidade') || n.includes('falta') || n.includes('suspens');
-    });
-    if (penalidades.length > 0) {
-      diasPenalidades = penalidades.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-    }
+    const diasPenalidades = incs.diasPenalidades;
     const anosPenalidades = Math.floor(diasPenalidades / 365);
     const mesesPenalidades = Math.floor((diasPenalidades % 365) / 30);
     const diasRestPenalidades = (diasPenalidades % 365) % 30;
@@ -507,20 +711,12 @@ export default function GeradorCertidao() {
     const diasRestPublico = remPublico % 30;
 
     // 7. Tempo de Contribuição na iniciativa privada incorporado (INSS)
-    const diasINSS = sim.diasAverbadosINSS || 0;
+    const diasINSS = (sim.diasAverbadosINSS || 0) + incs.diasINSSIncs;
     const anosINSS = Math.floor(diasINSS / 365);
     const mesesINSS = Math.floor((diasINSS % 365) / 30);
     const diasRestINSS = (diasINSS % 365) % 30;
 
-    let inssDesc = '';
-    const inssIncs = (sim.incorporacoes || []).filter(inc => {
-      const t = (inc.tipo || '').toLowerCase();
-      const n = (inc.nome || '').toLowerCase();
-      return t.includes('inss') || t.includes('rgps') || n.includes('inss') || n.includes('rgps');
-    });
-    if (inssIncs.length > 0) {
-      inssDesc = inssIncs.map(inc => inc.nome || (inc.dataInicio && inc.dataFim ? `${formatBR(inc.dataInicio)} a ${formatBR(inc.dataFim)}` : '')).filter(Boolean).join('; ');
-    }
+    let inssDesc = incs.inssDesc;
     if (!inssDesc && diasINSS > 0) {
       inssDesc = 'Certidão de Tempo de Contribuição CTC/INSS averbada';
     }
@@ -550,13 +746,13 @@ export default function GeradorCertidao() {
         matricula: sim.matricula || '',
         rg: sim.rg || '',
         cpf: sim.cpf || '',
-        sexo: sim.sexo === 'F' ? 'Feminino' : 'Masculino',
+        sexo: (sim.sexo === 'F' || (sim.sexo as string) === 'Feminino') ? 'Feminino' : 'Masculino',
         cargo: (sim.cargo || sim.selectedCareer || 'Servidor Público Municipal').replace(/_/g, ' '),
         dataNascimento: formatBR(sim.dataNascimento) || '',
         idadeHoje,
         idadeEm31Dez2021: idade31Dez2021,
         orgao: 'Câmara Municipal de Curitiba',
-        padrao: sim.padrao || '306',
+        padrao: sim.padrao || getPatternForCareer(sim.selectedCareer || sim.cargo) || '',
         referencia: sim.referencia || sim.selectedLevel || 'I',
         dataAdmissaoServicoPublico: dataAdmissaoSP,
         dataAdmissaoEstatutario: formatBR(dataEstatutario),
@@ -660,7 +856,7 @@ export default function GeradorCertidao() {
         ...certidaoData.regrasTransitorias,
         atsPercentual: (sim.lastAtsNumber || 0) * 5 || Math.min(50, Math.floor(anosCMC / 5) * 5),
         idadeEm31Dez2021: idade31Dez2021,
-        tempoEm31Dez2021Anos: Math.max(0, anosGeral - 4)
+        tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
       },
       lavratura: {
         ...certidaoData.lavratura,
@@ -668,6 +864,8 @@ export default function GeradorCertidao() {
       }
     };
 
+    hasManualEditsRef.current = false;
+    linkedSimMetaRef.current = { id: sim.id, updatedAt: sim.updatedAt };
     setCertidaoData(novaCertidao);
     setSelectedSimId(id);
     if (!silenciarFeedback) {
@@ -675,30 +873,46 @@ export default function GeradorCertidao() {
     }
   };
 
+  const resolverNumeroOficialParaEmissao = (): string => {
+    const atual = (certidaoData.numeroCertidao || '').trim();
+    if (!atual || atual === 'SIMULAÇÃO' || atual === '03/2026' || atual === getProximoNumeroOficial()) {
+      return consumirProximoNumeroOficial();
+    }
+    return atual;
+  };
+
   const handleEmitirPadrao = () => {
     try {
-      gerarCertidaoAposentadoriaPadraoPDF(certidaoData);
-      
-      const grade = certidaoData.gradeTempo.tempoTotalServicoContribuicao;
+      const numeroOficial = resolverNumeroOficialParaEmissao();
+      const oficialData: CertidaoData = {
+        ...certidaoData,
+        numeroCertidao: numeroOficial,
+        tipoCertidao: 'aposentadoria',
+        isSimulacao: false
+      };
+      gerarCertidaoAposentadoriaPadraoPDF(oficialData);
+      setCertidaoData(oficialData);
+
+      const grade = oficialData.gradeTempo.tempoTotalServicoContribuicao;
       salvarCertidaoEmitida({
         id: `oficial_${Date.now()}`,
-        numeroCertidao: certidaoData.numeroCertidao,
+        numeroCertidao: numeroOficial,
         tipo: 'oficial',
-        dataCertidao: certidaoData.dataCertidao,
+        dataCertidao: oficialData.dataCertidao,
         dataEmissaoTimestamp: new Date().toISOString(),
-        servidorNome: certidaoData.servidor.nome,
-        matricula: certidaoData.servidor.matricula,
-        cargo: certidaoData.servidor.cargo,
+        servidorNome: oficialData.servidor.nome,
+        matricula: oficialData.servidor.matricula,
+        cargo: oficialData.servidor.cargo,
         tempoTotalDias: grade.totalDias,
         tempoFormatado: `${grade.anos} anos, ${grade.meses} meses e ${grade.dias} dias`,
         emitidoPor: 'Setor de Processos e Benefícios Funcionais / DGEP',
-        snapshot: certidaoData
+        snapshot: oficialData
       });
       carregarHistorico();
-      triggerFeedback(`Certidão Oficial nº ${certidaoData.numeroCertidao} gerada e registrada no controle de emissões!`);
+      triggerFeedback(`Certidão Oficial nº ${numeroOficial} gerada e registrada no controle de emissões!`);
     } catch (e) {
       console.error(e);
-      alert('Erro ao gerar o PDF da Certidão. Verifique os dados inseridos.');
+      triggerFeedback('Erro ao gerar o PDF da Certidão. Verifique os dados inseridos.', true);
     }
   };
 
@@ -706,6 +920,7 @@ export default function GeradorCertidao() {
     try {
       const simData: CertidaoData = {
         ...certidaoData,
+        tipoCertidao: 'aposentadoria',
         numeroCertidao: 'SIMULAÇÃO',
         isSimulacao: true
       };
@@ -730,23 +945,26 @@ export default function GeradorCertidao() {
       triggerFeedback('Certidão de Simulação (Minuta em PDF) gerada com sucesso e registrada no controle!');
     } catch (e) {
       console.error(e);
-      alert('Erro ao gerar a Certidão de Simulação.');
+      triggerFeedback('Erro ao gerar a Certidão de Simulação.', true);
     }
   };
 
   const handleEmitirAbonoOficial = () => {
     try {
+      const numeroOficial = resolverNumeroOficialParaEmissao();
       const abonoData: CertidaoData = {
         ...certidaoData,
+        numeroCertidao: numeroOficial,
         tipoCertidao: 'abono_permanencia',
         isSimulacao: false
       };
       gerarCertidaoAposentadoriaPadraoPDF(abonoData);
-      
+      setCertidaoData(abonoData);
+
       const grade = abonoData.gradeTempo.tempoTotalServicoContribuicao;
       salvarCertidaoEmitida({
         id: `oficial_abono_${Date.now()}`,
-        numeroCertidao: abonoData.numeroCertidao,
+        numeroCertidao: numeroOficial,
         tipo: 'oficial',
         dataCertidao: abonoData.dataCertidao,
         dataEmissaoTimestamp: new Date().toISOString(),
@@ -759,10 +977,10 @@ export default function GeradorCertidao() {
         snapshot: abonoData
       });
       carregarHistorico();
-      triggerFeedback(`Certidão Oficial de Abono de Permanência nº ${abonoData.numeroCertidao} gerada e registrada!`);
+      triggerFeedback(`Certidão Oficial de Abono de Permanência nº ${numeroOficial} gerada e registrada!`);
     } catch (e) {
       console.error(e);
-      alert('Erro ao gerar o PDF da Certidão de Abono de Permanência.');
+      triggerFeedback('Erro ao gerar o PDF da Certidão de Abono de Permanência.', true);
     }
   };
 
@@ -795,7 +1013,7 @@ export default function GeradorCertidao() {
       triggerFeedback('Certidão de Abono de Permanência (Simulação) gerada e registrada no histórico!');
     } catch (e) {
       console.error(e);
-      alert('Erro ao gerar o PDF de simulação de abono.');
+      triggerFeedback('Erro ao gerar o PDF de simulação de abono.', true);
     }
   };
 
@@ -813,13 +1031,24 @@ export default function GeradorCertidao() {
     return null;
   };
 
-  // Atualizador da Data da Certidão com vínculo em tempo real no período estatutário
+  // Atualizador da Data da Certidão com vínculo em tempo real no período estatutário e marcos
   const updateDataCertidao = (novaData: string) => {
+    hasManualEditsRef.current = true;
     setCertidaoData(prev => {
       const dInicio = parseDateBR(prev.servidor.dataAdmissaoEstatutario);
       const dFim = parseDateBR(novaData);
-      
+      const dNasc = parseDateBR(prev.servidor.dataNascimento);
+
+      let updatedServidor = { ...prev.servidor };
+      if (dNasc && dFim) {
+        updatedServidor.idadeHoje = Math.max(0, Math.floor((dFim.getTime() - dNasc.getTime()) / (365.25 * 24 * 3600 * 1000)));
+      }
+
       let updatedGrade = { ...prev.gradeTempo };
+      let updatedMarcos = { ...prev.marcos };
+      let updatedRegras = { ...prev.regrasTransitorias };
+      let updatedTemposExercicio = { ...prev.temposExercicio };
+
       if (dInicio && dFim && dFim.getTime() >= dInicio.getTime()) {
         const diffDias = Math.floor((dFim.getTime() - dInicio.getTime()) / (24 * 3600 * 1000));
         const anos = Math.floor(diffDias / 365);
@@ -827,7 +1056,7 @@ export default function GeradorCertidao() {
         const meses = Math.floor(rem / 30);
         const dias = rem % 30;
         const novoPeriodo = `${prev.servidor.dataAdmissaoEstatutario} a ${novaData}`;
-        
+
         updatedGrade = recalcularGrade({
           ...updatedGrade,
           tempoEstatutarioCMC: {
@@ -839,6 +1068,30 @@ export default function GeradorCertidao() {
             periodoDesc: novoPeriodo
           }
         });
+
+        const date31Dez2021 = new Date(2021, 11, 31);
+        const diasAte31Dez2021 = dInicio <= date31Dez2021
+          ? Math.max(0, Math.floor((date31Dez2021.getTime() - dInicio.getTime()) / (24 * 3600 * 1000)))
+          : 0;
+        updatedMarcos = {
+          diasAteEmissao: diffDias,
+          diasAte31Dez2021,
+          diferencaDias: Math.max(0, diffDias - diasAte31Dez2021)
+        };
+        updatedRegras = {
+          ...updatedRegras,
+          tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
+        };
+        updatedTemposExercicio = {
+          servicoPublicoTotal: {
+            ...updatedGrade.tempoTotalServicoPublico,
+            periodoDesc: prev.servidor.dataAdmissaoServicoPublico ? `${prev.servidor.dataAdmissaoServicoPublico} a ${novaData}` : prev.temposExercicio.servicoPublicoTotal.periodoDesc
+          },
+          cargoEfetivoTotal: {
+            ...updatedGrade.tempoEstatutarioCMC,
+            periodoDesc: novoPeriodo
+          }
+        };
       } else {
         updatedGrade = {
           ...updatedGrade,
@@ -852,16 +1105,54 @@ export default function GeradorCertidao() {
       return {
         ...prev,
         dataCertidao: novaData,
+        servidor: updatedServidor,
+        marcos: updatedMarcos,
+        regrasTransitorias: updatedRegras,
+        temposExercicio: updatedTemposExercicio,
         gradeTempo: updatedGrade
       };
     });
   };
 
-  // Atualizador para campos funcionais do servidor com sincronização automática do período estatutário
+  // Atualizador para campos funcionais do servidor com sincronização automática de idade, período estatutário e marcos
   const updateServidor = (field: string, value: any) => {
+    hasManualEditsRef.current = true;
     setCertidaoData(prev => {
       const updatedServidor = { ...prev.servidor, [field]: value };
       let updatedGrade = { ...prev.gradeTempo };
+      let updatedMarcos = { ...prev.marcos };
+      let updatedRegras = { ...prev.regrasTransitorias };
+      let updatedTemposExercicio = { ...prev.temposExercicio };
+
+      if (field === 'cargo' && !prev.servidor.padrao) {
+        const autoPadrao = getPatternForCareer(value);
+        if (autoPadrao) {
+          updatedServidor.padrao = autoPadrao;
+        }
+      }
+
+      if (field === 'dataNascimento') {
+        const dNasc = parseDateBR(value);
+        const dRef = parseDateBR(prev.dataCertidao) || new Date();
+        if (dNasc) {
+          updatedServidor.idadeHoje = Math.max(0, Math.floor((dRef.getTime() - dNasc.getTime()) / (365.25 * 24 * 3600 * 1000)));
+          const date2021 = new Date(2021, 11, 31);
+          updatedRegras = {
+            ...updatedRegras,
+            idadeEm31Dez2021: Math.max(0, Math.floor((date2021.getTime() - dNasc.getTime()) / (365.25 * 24 * 3600 * 1000)))
+          };
+        }
+      }
+
+      if (field === 'dataAdmissaoServicoPublico') {
+        updatedTemposExercicio = {
+          ...updatedTemposExercicio,
+          servicoPublicoTotal: {
+            ...updatedTemposExercicio.servicoPublicoTotal,
+            periodoDesc: value ? `${value} a ${prev.dataCertidao}` : updatedTemposExercicio.servicoPublicoTotal.periodoDesc
+          }
+        };
+      }
 
       if (field === 'dataAdmissaoEstatutario') {
         const dInicio = parseDateBR(value);
@@ -873,7 +1164,7 @@ export default function GeradorCertidao() {
           const meses = Math.floor(rem / 30);
           const dias = rem % 30;
           const novoPeriodo = `${value} a ${prev.dataCertidao}`;
-          
+
           updatedGrade = recalcularGrade({
             ...updatedGrade,
             tempoEstatutarioCMC: {
@@ -885,6 +1176,30 @@ export default function GeradorCertidao() {
               periodoDesc: novoPeriodo
             }
           });
+
+          const date31Dez2021 = new Date(2021, 11, 31);
+          const diasAte31Dez2021 = dInicio <= date31Dez2021
+            ? Math.max(0, Math.floor((date31Dez2021.getTime() - dInicio.getTime()) / (24 * 3600 * 1000)))
+            : 0;
+          updatedMarcos = {
+            diasAteEmissao: diffDias,
+            diasAte31Dez2021,
+            diferencaDias: Math.max(0, diffDias - diasAte31Dez2021)
+          };
+          updatedRegras = {
+            ...updatedRegras,
+            tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
+          };
+          updatedTemposExercicio = {
+            servicoPublicoTotal: {
+              ...updatedGrade.tempoTotalServicoPublico,
+              periodoDesc: prev.servidor.dataAdmissaoServicoPublico ? `${prev.servidor.dataAdmissaoServicoPublico} a ${prev.dataCertidao}` : prev.temposExercicio.servicoPublicoTotal.periodoDesc
+            },
+            cargoEfetivoTotal: {
+              ...updatedGrade.tempoEstatutarioCMC,
+              periodoDesc: novoPeriodo
+            }
+          };
         } else {
           updatedGrade = {
             ...updatedGrade,
@@ -899,6 +1214,9 @@ export default function GeradorCertidao() {
       return {
         ...prev,
         servidor: updatedServidor,
+        marcos: updatedMarcos,
+        regrasTransitorias: updatedRegras,
+        temposExercicio: updatedTemposExercicio,
         gradeTempo: updatedGrade
       };
     });
@@ -906,6 +1224,7 @@ export default function GeradorCertidao() {
 
   // Atualizador com recálculo automático de subtotais e totais
   const updateGradeItem = (itemKey: keyof CertidaoData['gradeTempo'], subField: string, value: any) => {
+    hasManualEditsRef.current = true;
     setCertidaoData(prev => {
       const current = prev.gradeTempo[itemKey];
       const updatedItem = { ...current, [subField]: value };
@@ -948,121 +1267,154 @@ export default function GeradorCertidao() {
   };
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto pb-12">
+    <div className={embedded ? 'space-y-5' : 'space-y-6 max-w-6xl mx-auto pb-12'}>
       {/* Banner de Título */}
-      <div className="bg-gradient-to-r from-[#002f5a] via-[#004b8d] to-[#013564] text-white p-6 sm:p-8 rounded-2xl shadow-sm relative overflow-hidden">
-        <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-          <div className="space-y-2 max-w-3xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white/15 text-white text-xs font-semibold tracking-wide uppercase">
-                <FileCheck size={13} />
-                Módulo Oficial DGEP / CMC
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white/10 text-blue-100 text-xs font-semibold tracking-wide">
-                Documento Oficial em PDF
-              </span>
+      {!embedded && (
+        <div className="bg-gradient-to-r from-[#002f5a] via-[#004b8d] to-[#013564] text-white p-6 sm:p-8 rounded-2xl shadow-sm relative overflow-hidden">
+          <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-3xl">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white/15 text-white text-xs font-semibold tracking-wide uppercase">
+                  <FileCheck size={13} />
+                  Módulo Oficial DGEP / CMC
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white/10 text-blue-100 text-xs font-semibold tracking-wide">
+                  Documento Oficial em PDF
+                </span>
+              </div>
+              
+              <h1 className="text-2xl sm:text-3.5xl font-extrabold tracking-tight">
+                Gerador de Certidão de Aposentadoria
+              </h1>
+              <p className="text-blue-100/90 text-xs sm:text-sm leading-relaxed">
+                Emissão oficial da <strong>Certidão de Tempo de Contribuição e Vínculos Funcionais</strong> (padrão Setor de Gestão de Processos e Benefícios Funcionais) com integração automatizada aos dados da simulação previdenciária.
+              </p>
             </div>
-            
-            <h1 className="text-2xl sm:text-3.5xl font-extrabold tracking-tight">
-              Gerador de Certidão de Aposentadoria
-            </h1>
-            <p className="text-blue-100/90 text-xs sm:text-sm leading-relaxed">
-              Emissão oficial da <strong>Certidão de Tempo de Contribuição e Vínculos Funcionais</strong> (padrão Setor de Gestão de Processos e Benefícios Funcionais) com integração automatizada aos dados da simulação previdenciária.
-            </p>
+
+            <div className="hidden md:flex items-center gap-3 bg-white p-2.5 px-4 rounded-xl shadow-md shrink-0 border border-white/20">
+              <img 
+                src="/assets/aistudio/horizontal_preto_pequeno_b6636aa0.png" 
+                alt="Câmara Municipal de Curitiba" 
+                className="h-10 w-auto object-contain" 
+              />
+            </div>
           </div>
 
-          <div className="hidden md:flex items-center gap-3 bg-white p-2.5 px-4 rounded-xl shadow-md shrink-0 border border-white/20">
-            <img 
-              src="/assets/aistudio/horizontal_preto_pequeno_b6636aa0.png" 
-              alt="Câmara Municipal de Curitiba" 
-              className="h-10 w-auto object-contain" 
-            />
-          </div>
+          {/* Feedback flutuante */}
+          {mensagemSucesso && (
+            <div className={`mt-4 p-3 ${mensagemSucesso.isError ? 'bg-red-600/95' : 'bg-emerald-600/90'} backdrop-blur-md text-white rounded-lg text-xs font-semibold flex items-center gap-2 animate-fade-in shadow-md`}>
+              {mensagemSucesso.isError ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
+              <span>{mensagemSucesso.text}</span>
+            </div>
+          )}
         </div>
+      )}
 
-        {/* Feedback flutuante */}
-        {mensagemSucesso && (
-          <div className="mt-4 p-3 bg-emerald-600/90 backdrop-blur-md text-white rounded-lg text-xs font-semibold flex items-center gap-2 animate-fade-in shadow-md">
-            <CheckCircle2 size={16} />
-            <span>{mensagemSucesso}</span>
-          </div>
-        )}
-      </div>
+      {embedded && mensagemSucesso && (
+        <div className={`p-3 ${mensagemSucesso.isError ? 'bg-red-50 text-red-800 border-red-200' : 'bg-emerald-50 text-emerald-800 border-emerald-200'} border rounded-lg text-xs font-semibold flex items-center gap-2 animate-fade-in`}>
+          {mensagemSucesso.isError ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
+          <span>{mensagemSucesso.text}</span>
+        </div>
+      )}
 
       {/* Barra de Vinculação com Simulação e Emissão */}
       <div className="bg-white border border-[#dee2e6] rounded-xl p-4 shadow-xs space-y-3">
         <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
           {/* Lado Esquerdo: Seletor Central de Simulações do Sistema */}
           <div className="flex flex-wrap items-center gap-2.5 flex-1">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-gray-700 shrink-0">
-              <FolderSync size={16} className="text-[#004b8d]" />
-              <span>Simulação Vinculada:</span>
-            </div>
-
-            <div className="flex-1 min-w-[260px] max-w-xl">
-              <select
-                value={selectedSimId}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSelectedSimId(val);
-                  if (val === 'blank') {
-                    setCertidaoData(getCertidaoInicialVazia());
-                    triggerFeedback('Formulário da certidão limpo para edição avulsa.');
-                  } else if (val === 'exemplo_valdemir') {
-                    setCertidaoData(DADOS_EXEMPLO_VALDEMIR);
-                    triggerFeedback('Modelo de referência (Certidão nº 03/2026 - TCE) carregado.');
-                  } else if (val === 'draft' && draftSimulation) {
-                    handleImportarSimulacao('draft', draftSimulation);
-                  } else if (val) {
-                    handleImportarSimulacao(val);
-                  }
-                }}
-                className="w-full text-xs bg-gray-50 border border-gray-300 text-gray-800 rounded-lg px-3 py-2 font-semibold focus:ring-2 focus:ring-[#004b8d] focus:outline-none"
-              >
-                {draftSimulation && (
-                  <option value="draft">
-                    ⭐ Simulação Ativa em Andamento ({draftSimulation.nome || 'Rascunho'} — Matrícula: {draftSimulation.matricula || '---'})
-                  </option>
-                )}
-                {savedSimulations.map(sim => (
-                  <option key={sim.id} value={sim.id}>
-                    📁 {sim.nome || 'Sem Nome'} (Matrícula: {sim.matricula || '---'}) — {sim.cargo || sim.selectedCareer?.replace(/_/g, ' ') || 'Servidor'}
-                  </option>
-                ))}
-                <option value="blank">📝 Certidão em Branco (Edição Manual)</option>
-                <option value="exemplo_valdemir">ℹ️ Modelo de Referência Histórico (Certidão 03/2026 - TCE)</option>
-              </select>
-            </div>
-
-            {/* Botão de Sincronização / Recarregar */}
-            {selectedSimId && selectedSimId !== 'blank' && selectedSimId !== 'exemplo_valdemir' && (
+            {externalSim ? (
               <button
                 type="button"
-                onClick={() => {
-                  if (selectedSimId === 'draft' && draftSimulation) {
-                    handleImportarSimulacao('draft', draftSimulation);
-                  } else {
-                    handleImportarSimulacao(selectedSimId);
-                  }
-                }}
+                onClick={() => handleImportarSimulacao(externalSim.id, externalSim)}
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-teal-50 text-teal-800 hover:bg-teal-100 text-xs font-bold transition-all border border-teal-200 cursor-pointer shadow-2xs"
-                title="Recarregar e atualizar todos os dados com base na simulação selecionada"
+                title="Recarregar e atualizar todos os campos da certidão com os dados atuais do cadastro"
               >
                 <RefreshCw size={13} className="text-teal-600" />
-                Sincronizar Dados
+                Sincronizar do Cadastro
               </button>
+            ) : (
+              <>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-gray-700 shrink-0">
+                  <FolderSync size={16} className="text-[#004b8d]" />
+                  <span>Simulação Vinculada:</span>
+                </div>
+
+                <div className="flex-1 min-w-[260px] max-w-xl">
+                  <select
+                    value={selectedSimId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedSimId(val);
+                      if (val === 'blank') {
+                        hasManualEditsRef.current = true;
+                        linkedSimMetaRef.current = { id: 'blank', updatedAt: undefined };
+                        setCertidaoData(getCertidaoInicialVazia());
+                        triggerFeedback('Formulário da certidão limpo para edição avulsa.');
+                      } else if (val === 'exemplo_valdemir') {
+                        hasManualEditsRef.current = true;
+                        linkedSimMetaRef.current = { id: 'exemplo_valdemir', updatedAt: undefined };
+                        setCertidaoData(DADOS_EXEMPLO_VALDEMIR);
+                        triggerFeedback('Modelo de referência (Certidão nº 03/2026 - TCE) carregado.');
+                      } else if (val === 'draft') {
+                        const latestDraft = getDraftSimulation() || draftSimulation;
+                        if (latestDraft) {
+                          setDraftSimulation(latestDraft);
+                          handleImportarSimulacao('draft', latestDraft);
+                        }
+                      } else if (val) {
+                        handleImportarSimulacao(val);
+                      }
+                    }}
+                    className="w-full text-xs bg-gray-50 border border-gray-300 text-gray-800 rounded-lg px-3 py-2 font-semibold focus:ring-2 focus:ring-[#004b8d] focus:outline-none"
+                  >
+                    {draftSimulation && (
+                      <option value="draft">
+                        ⭐ Simulação Ativa em Andamento ({draftSimulation.nome || 'Rascunho'} — Matrícula: {draftSimulation.matricula || '---'})
+                      </option>
+                    )}
+                    {savedSimulations.map(sim => (
+                      <option key={sim.id} value={sim.id}>
+                        📁 {sim.nome || 'Sem Nome'} (Matrícula: {sim.matricula || '---'}) — {sim.cargo || sim.selectedCareer?.replace(/_/g, ' ') || 'Servidor'}
+                      </option>
+                    ))}
+                    <option value="blank">📝 Certidão em Branco (Edição Manual)</option>
+                    <option value="exemplo_valdemir">ℹ️ Modelo de Referência Histórico (Certidão 03/2026 - TCE)</option>
+                  </select>
+                </div>
+
+                {/* Botão de Sincronização / Recarregar */}
+                {selectedSimId && selectedSimId !== 'blank' && selectedSimId !== 'exemplo_valdemir' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedSimId === 'draft') {
+                        const latestDraft = getDraftSimulation() || draftSimulation;
+                        if (latestDraft) {
+                          setDraftSimulation(latestDraft);
+                          handleImportarSimulacao('draft', latestDraft);
+                        }
+                      } else {
+                        handleImportarSimulacao(selectedSimId);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-teal-50 text-teal-800 hover:bg-teal-100 text-xs font-bold transition-all border border-teal-200 cursor-pointer shadow-2xs"
+                    title="Recarregar e atualizar todos os dados com base na simulação selecionada"
+                  >
+                    <RefreshCw size={13} className="text-teal-600" />
+                    Sincronizar Dados
+                  </button>
+                )}
+              </>
             )}
 
-            {/* Gerar Próximo Número Oficial */}
-            <button
-              type="button"
-              onClick={gerarProximoNumero}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-50 text-amber-900 hover:bg-amber-100 text-xs font-bold transition-all border border-amber-200 cursor-pointer shadow-2xs"
-              title="Gerar próximo número sequencial oficial da Certidão"
+            {/* Indicador do Número Atual da Certidão */}
+            <div
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-50 text-amber-900 text-xs font-bold border border-amber-200"
+              title="Número atual da certidão (para gerar o próximo número sequencial, use o botão Gerar Próximo na aba 1)"
             >
               <Hash size={13} className="text-amber-700" />
-              Nº Oficial: {certidaoData.numeroCertidao}
-            </button>
+              <span>Nº Atual: {certidaoData.numeroCertidao}</span>
+            </div>
           </div>
 
           {/* Lado Direito: Botões de Emissão */}
@@ -1109,21 +1461,35 @@ export default function GeradorCertidao() {
           </div>
         </div>
 
-        {/* Status do Servidor Vinculado */}
+        {/* Status resumido da certidão (sem repetir dados já exibidos no cabeçalho do dossiê) */}
         <div className="flex flex-wrap items-center justify-between text-xs pt-2.5 border-t border-gray-150 gap-2">
-          <div className="flex flex-wrap items-center gap-2 text-gray-600">
-            <span className={`inline-block w-2.5 h-2.5 rounded-full ${certidaoData.servidor.nome ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`}></span>
-            <span>Servidor Vinculado: <strong className="text-gray-900">{certidaoData.servidor.nome || 'Nenhum servidor vinculado (certidão vazia)'}</strong></span>
-            {certidaoData.servidor.matricula && (
-              <span className="text-gray-400 font-mono">| Matrícula: <strong className="text-gray-800">{certidaoData.servidor.matricula}</strong></span>
-            )}
-            {certidaoData.servidor.cargo && (
-              <span className="text-gray-400">| Cargo: <strong className="text-gray-800">{certidaoData.servidor.cargo}</strong></span>
-            )}
-          </div>
+          {externalSim ? (
+            <div className="flex items-center gap-2 text-gray-600">
+              <span className={`inline-block w-2 h-2 rounded-full ${certidaoData.servidor.nome ? 'bg-emerald-500' : 'bg-gray-400'}`}></span>
+              <span>
+                Finalidade atual:{' '}
+                <strong className="text-[#002f5a]">
+                  {certidaoData.tipoCertidao === 'abono_permanencia'
+                    ? 'Certidão para Abono de Permanência'
+                    : 'Certidão de Aposentadoria'}
+                </strong>
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2 text-gray-600">
+              <span className={`inline-block w-2.5 h-2.5 rounded-full ${certidaoData.servidor.nome ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`}></span>
+              <span>Servidor Vinculado: <strong className="text-gray-900">{certidaoData.servidor.nome || 'Nenhum servidor vinculado (certidão vazia)'}</strong></span>
+              {certidaoData.servidor.matricula && (
+                <span className="text-gray-400 font-mono">| Matrícula: <strong className="text-gray-800">{certidaoData.servidor.matricula}</strong></span>
+              )}
+              {certidaoData.servidor.cargo && (
+                <span className="text-gray-400">| Cargo: <strong className="text-gray-800">{certidaoData.servidor.cargo}</strong></span>
+              )}
+            </div>
+          )}
 
           <div className="text-[11px] text-gray-500">
-            Tempo Total Averbação: <strong className="text-[#002f5a] font-bold">{certidaoData.gradeTempo.tempoTotalServicoContribuicao.anos} anos, {certidaoData.gradeTempo.tempoTotalServicoContribuicao.meses} m, {certidaoData.gradeTempo.tempoTotalServicoContribuicao.dias} d</strong> ({certidaoData.gradeTempo.tempoTotalServicoContribuicao.totalDias} dias)
+            Tempo Total na Certidão: <strong className="text-[#002f5a] font-bold">{certidaoData.gradeTempo.tempoTotalServicoContribuicao.anos} anos, {certidaoData.gradeTempo.tempoTotalServicoContribuicao.meses} m, {certidaoData.gradeTempo.tempoTotalServicoContribuicao.dias} d</strong> ({certidaoData.gradeTempo.tempoTotalServicoContribuicao.totalDias} dias)
           </div>
         </div>
       </div>
@@ -1595,31 +1961,33 @@ export default function GeradorCertidao() {
       {/* ABA 1: DADOS DO SERVIDOR */}
       {activeTab === 'servidor' && (
         <div className="bg-white border border-[#dee2e6] rounded-xl p-6 shadow-xs space-y-6">
-          <div className="border-b border-gray-150 pb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-[#004b8d] uppercase tracking-wide flex items-center gap-2">
-              <User size={16} /> Identificação Funcional e Registros no TCE-PR
-            </h2>
-            <span className="text-xs text-gray-400 font-medium">Campos oficiais da certidão</span>
+          <div className="border-b border-gray-150 pb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-[#004b8d] uppercase tracking-wide flex items-center gap-2">
+                <User size={16} /> Identificação Funcional e Registros no TCE-PR
+              </h2>
+              <span className="text-xs text-gray-400 font-medium">Campos oficiais da certidão (salvos automaticamente no rascunho)</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleSalvarDadosIdentificacao}
+              disabled={isSavingIdentificacao}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#004b8d] hover:bg-[#003768] disabled:opacity-60 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+              title="Salvar alterações da identificação funcional e TCE-PR na simulação vinculada"
+            >
+              <Save size={14} />
+              {isSavingIdentificacao ? 'Salvando...' : 'Salvar Dados'}
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-gray-700">Número da Certidão</label>
-                <button
-                  type="button"
-                  onClick={gerarProximoNumero}
-                  className="text-[11px] font-bold text-[#004b8d] hover:underline cursor-pointer flex items-center gap-1"
-                  title="Gerar próximo número sequencial oficial"
-                >
-                  <RefreshCw size={11} /> Auto-Gerar
-                </button>
-              </div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">Número da Certidão</label>
               <div className="flex gap-1.5">
                 <input
                   type="text"
                   value={certidaoData.numeroCertidao}
-                  onChange={(e) => setCertidaoData({ ...certidaoData, numeroCertidao: e.target.value })}
+                  onChange={(e) => { hasManualEditsRef.current = true; setCertidaoData({ ...certidaoData, numeroCertidao: e.target.value }); }}
                   className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono font-bold text-gray-800"
                   placeholder="Ex: 04/2026"
                 />
@@ -1638,7 +2006,7 @@ export default function GeradorCertidao() {
               <label className="block text-xs font-bold text-gray-700 mb-1">Finalidade da Certidão</label>
               <select
                 value={certidaoData.tipoCertidao || 'aposentadoria'}
-                onChange={(e) => setCertidaoData({ ...certidaoData, tipoCertidao: e.target.value as any })}
+                onChange={(e) => { hasManualEditsRef.current = true; setCertidaoData({ ...certidaoData, tipoCertidao: e.target.value as any }); }}
                 className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-bold bg-white text-gray-800"
               >
                 <option value="aposentadoria">Certidão de Aposentadoria</option>
@@ -1803,6 +2171,14 @@ export default function GeradorCertidao() {
                 placeholder="Ex: 402750/03 - Resolução nº 8253/2003"
               />
             </div>
+          </div>
+
+          <div className="pt-3 border-t border-gray-150">
+            <span className="text-xs text-gray-500">
+              {selectedSimId && selectedSimId !== 'blank' && selectedSimId !== 'exemplo_valdemir'
+                ? 'As alterações são sincronizadas com o cadastro do servidor ao clicar em Salvar Dados no topo deste bloco.'
+                : 'As alterações são gravadas localmente no rascunho da certidão.'}
+            </span>
           </div>
         </div>
       )}
@@ -2583,34 +2959,50 @@ export default function GeradorCertidao() {
 
           {/* Filtros e Busca */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
-            <div className="flex items-center gap-1.5 bg-gray-100 p-1 rounded-lg self-start">
-              <button
-                type="button"
-                onClick={() => setFiltroHistorico('todas')}
-                className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                  filtroHistorico === 'todas' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Todas ({historicoCertidoes.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFiltroHistorico('oficial')}
-                className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                  filtroHistorico === 'oficial' ? 'bg-white text-emerald-800 shadow-xs' : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Oficiais ({historicoCertidoes.filter(c => c.tipo === 'oficial').length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFiltroHistorico('simulacao')}
-                className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                  filtroHistorico === 'simulacao' ? 'bg-white text-amber-800 shadow-xs' : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Simulações ({historicoCertidoes.filter(c => c.tipo === 'simulacao').length})
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 bg-gray-100 p-1 rounded-lg self-start">
+                <button
+                  type="button"
+                  onClick={() => setFiltroHistorico('todas')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    filtroHistorico === 'todas' ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Todas ({historicoCertidoes.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFiltroHistorico('oficial')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    filtroHistorico === 'oficial' ? 'bg-white text-emerald-800 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Oficiais ({historicoCertidoes.filter(c => c.tipo === 'oficial').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFiltroHistorico('simulacao')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    filtroHistorico === 'simulacao' ? 'bg-white text-amber-800 shadow-xs' : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Simulações ({historicoCertidoes.filter(c => c.tipo === 'simulacao').length})
+                </button>
+              </div>
+
+              {externalSim && (
+                <button
+                  type="button"
+                  onClick={() => setSomenteServidorAtual(prev => !prev)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+                    somenteServidorAtual
+                      ? 'bg-blue-50 text-[#004b8d] border-blue-200'
+                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  {somenteServidorAtual ? 'Somente este Servidor' : 'Todos os Servidores'}
+                </button>
+              )}
             </div>
 
             <div className="relative w-full sm:w-72">
@@ -2628,6 +3020,15 @@ export default function GeradorCertidao() {
           {/* Tabela de Certidões */}
           {(() => {
             const filtradas = historicoCertidoes.filter(c => {
+              if (externalSim && somenteServidorAtual) {
+                const cMat = (c.matricula || '').trim().toLowerCase();
+                const sMat = (externalSim.matricula || '').trim().toLowerCase();
+                const cNome = (c.servidorNome || '').trim().toLowerCase();
+                const sNome = (externalSim.nome || '').trim().toLowerCase();
+                const sameMat = Boolean(cMat && sMat && cMat === sMat);
+                const sameNome = Boolean(cNome && sNome && cNome === sNome);
+                if (!sameMat && !sameNome) return false;
+              }
               if (filtroHistorico !== 'todas' && c.tipo !== filtroHistorico) return false;
               if (buscaHistorico.trim()) {
                 const termo = buscaHistorico.toLowerCase();
@@ -2659,7 +3060,8 @@ export default function GeradorCertidao() {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-gray-50 text-gray-700 border-b border-gray-200 font-bold">
-                      <th className="p-3">Número / Tipo</th>
+                      <th className="p-3">Número / Natureza</th>
+                      <th className="p-3">Finalidade</th>
                       <th className="p-3">Servidor</th>
                       <th className="p-3">Data Certidão</th>
                       <th className="p-3">Tempo Certificado</th>
@@ -2668,7 +3070,9 @@ export default function GeradorCertidao() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {filtradas.map(item => (
+                    {filtradas.map(item => {
+                      const isAbono = item.snapshot?.tipoCertidao === 'abono_permanencia';
+                      return (
                       <tr key={item.id} className="hover:bg-blue-50/30 transition-colors">
                         <td className="p-3">
                           {item.tipo === 'oficial' ? (
@@ -2682,6 +3086,13 @@ export default function GeradorCertidao() {
                               SIMULAÇÃO
                             </span>
                           )}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            isAbono ? 'bg-teal-50 text-teal-800 border-teal-200' : 'bg-blue-50 text-[#004b8d] border-blue-200'
+                          }`}>
+                            {isAbono ? 'Abono de Permanência' : 'Aposentadoria'}
+                          </span>
                         </td>
                         <td className="p-3">
                           <strong className="block text-gray-900 text-[12px]">{item.servidorNome}</strong>
@@ -2706,7 +3117,7 @@ export default function GeradorCertidao() {
                                   gerarCertidaoAposentadoriaPadraoPDF(item.snapshot);
                                   triggerFeedback(`Certidão (${item.numeroCertidao}) baixada novamente!`);
                                 } catch (e) {
-                                  alert('Erro ao gerar o PDF da certidão selecionada.');
+                                  triggerFeedback('Erro ao gerar o PDF da certidão selecionada.', true);
                                 }
                               }}
                               className="p-1.5 px-2 bg-blue-50 hover:bg-blue-100 text-[#004b8d] rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
@@ -2730,13 +3141,7 @@ export default function GeradorCertidao() {
 
                             <button
                               type="button"
-                              onClick={() => {
-                                if (confirm(`Deseja remover o registro da Certidão (${item.numeroCertidao}) do servidor ${item.servidorNome} do controle?`)) {
-                                  excluirCertidaoEmitida(item.id);
-                                  carregarHistorico();
-                                  triggerFeedback('Registro de certidão removido com sucesso.');
-                                }
-                              }}
+                              onClick={() => setDeleteHistTarget(item)}
                               className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md cursor-pointer transition-colors"
                               title="Excluir este registro"
                             >
@@ -2745,12 +3150,44 @@ export default function GeradorCertidao() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                    );})}
                   </tbody>
                 </table>
               </div>
             );
           })()}
+
+          {deleteHistTarget && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+              <div className="bg-white rounded-2xl max-w-md w-full border border-gray-200 shadow-2xl p-6 space-y-4">
+                <h3 className="text-base font-bold text-gray-900">Excluir Registro de Certidão</h3>
+                <p className="text-xs text-gray-600">
+                  Deseja remover a certidão <strong>{deleteHistTarget.numeroCertidao}</strong> de <strong>{deleteHistTarget.servidorNome}</strong> do controle de emissões?
+                </p>
+                <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteHistTarget(null)}
+                    className="px-4 py-2 rounded-lg border border-gray-200 text-xs font-bold text-gray-700 hover:bg-gray-50 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      excluirCertidaoEmitida(deleteHistTarget.id);
+                      setDeleteHistTarget(null);
+                      carregarHistorico();
+                      triggerFeedback('Registro de certidão removido com sucesso.');
+                    }}
+                    className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Confirmar Exclusão
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -47,6 +47,7 @@ export default function SimulacoesSalvas({ onNavigate }: SimulacoesSalvasProps) 
   const handleResume = (sim: UnifiedSimulation) => {
     // Save as draft to load context
     localStorage.setItem('dgep_unified_draft', JSON.stringify(sim));
+    localStorage.removeItem('dgep_certidao_draft_v1');
     if (onNavigate) {
       onNavigate('simulacao_completa');
     } else {
@@ -56,6 +57,7 @@ export default function SimulacoesSalvas({ onNavigate }: SimulacoesSalvasProps) 
 
   const handleGerarCertidao = (sim: UnifiedSimulation) => {
     localStorage.setItem('dgep_unified_draft', JSON.stringify(sim));
+    localStorage.removeItem('dgep_certidao_draft_v1');
     if (onNavigate) {
       onNavigate('gerador_certidao');
     }

@@ -1,14 +1,8 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
-import ProventosAposentadoria from './components/ProventosAposentadoria';
-import RegrasAposentadoria from './components/RegrasAposentadoria';
-import AtualizacaoContribuicoes from './components/AtualizacaoContribuicoes';
-import GratificacaoEspecial from './components/GratificacaoEspecial';
-import SimulacaoCompleta from './components/SimulacaoCompleta';
-import SimulacoesSalvas from './components/SimulacoesSalvas';
+import ServidoresHub from './components/ServidoresHub';
 import Cadastros from './components/Cadastros';
-import GeradorCertidao from './components/GeradorCertidao';
 import { Scale, CheckCircle2, Menu, LogOut, ShieldAlert, UserCheck } from 'lucide-react';
 import { initMigration } from './utils/simulationsStore';
 import { loadSettingsFromServer } from './utils/settingsStore';
@@ -170,20 +164,17 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard onNavigate={(tabId) => setActiveTab(tabId)} />;
-      case 'gerador_certidao':
-        return <GeradorCertidao />;
-      case 'proventos':
-        return <ProventosAposentadoria />;
-      case 'regras':
-        return <RegrasAposentadoria />;
-      case 'atualizacao':
-        return <AtualizacaoContribuicoes />;
-      case 'gratificacao':
-        return <GratificacaoEspecial />;
-      case 'simulacao_completa':
-        return <SimulacaoCompleta />;
+      case 'servidores':
       case 'simulacoes_salvas':
-        return <SimulacoesSalvas onNavigate={(tabId) => setActiveTab(tabId)} />;
+        return <ServidoresHub initialView="lista" initialListTab="carteira" />;
+      case 'acompanhamento':
+        return <ServidoresHub initialView="lista" initialListTab="acompanhamento" />;
+      case 'simulacao_completa':
+        return <ServidoresHub initialView="dossie" initialSection="cadastro" />;
+      case 'gerador_certidao':
+        return <ServidoresHub initialView="dossie" initialSection="certidoes" />;
+      case 'atualizacao':
+        return <Cadastros initialTab="atualizacao" />;
       case 'cadastros':
         return <Cadastros />;
       default:
@@ -195,22 +186,17 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return 'Início';
+      case 'acompanhamento':
+        return 'Acompanhamento de Cadastros & Controle de Certidões';
+      case 'servidores':
+      case 'simulacao_completa':
+      case 'simulacoes_salvas':
       case 'gerador_certidao':
-        return 'Gerador de Certidão & Remessa ao IPMC';
-      case 'proventos':
-        return 'Cálculo de Proventos de Aposentadoria';
-      case 'regras':
-        return 'Elegibilidade de Regras IPMC';
+        return 'Servidores, Simulações & Documentos';
       case 'atualizacao':
         return 'Atualização Monetária de Contribuições';
-      case 'gratificacao':
-        return 'Simulador de Gratificação Especial';
-      case 'simulacao_completa':
-        return 'Simulação Completa';
-      case 'simulacoes_salvas':
-        return 'Simulações Salvas';
       case 'cadastros':
-        return 'Gestão de Cadastros';
+        return 'Cadastros & Atualização de Contribuições';
       default:
         return 'Painel de Controle';
     }

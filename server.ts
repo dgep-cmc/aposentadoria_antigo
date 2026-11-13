@@ -7,7 +7,7 @@ import { createServer as createViteServer } from "vite";
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const DB_FILE = path.join(process.cwd(), "simulations_db.json");
 const SETTINGS_DB_FILE = path.join(process.cwd(), "settings_db.json");

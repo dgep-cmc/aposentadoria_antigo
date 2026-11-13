@@ -441,18 +441,36 @@ export async function getFirestoreSimulations(): Promise<UnifiedSimulation[]> {
   }
 }
 
+function sanitizeForFirestore<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (typeof obj === 'object' && !(obj instanceof Date)) {
+    const clean: Record<string, any> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, any>)) {
+      if (v !== undefined) {
+        clean[k] = sanitizeForFirestore(v);
+      }
+    }
+    return clean as T;
+  }
+  return obj;
+}
+
 export async function writeFirestoreSimulation(sim: UnifiedSimulation): Promise<void> {
+  const cleanSim = sanitizeForFirestore(sim);
   if (isFirebaseConfigured && db) {
-    const path = `simulations/${sim.id}`;
+    const path = `simulations/${cleanSim.id}`;
     try {
-      await setDoc(doc(db, 'simulations', sim.id), sim);
+      await setDoc(doc(db, 'simulations', cleanSim.id), cleanSim);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     }
   } else {
     const sims = getLocalSimsSync();
-    const filtered = sims.filter(s => s.id !== sim.id);
-    filtered.push(sim);
+    const filtered = sims.filter(s => s.id !== cleanSim.id);
+    filtered.push(cleanSim);
     saveLocalSimsSync(filtered);
   }
 }

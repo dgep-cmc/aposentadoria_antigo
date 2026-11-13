@@ -46,6 +46,66 @@ export const careerDisplayNames: { [key: string]: string } = {
   tecnico_suporte_informatica: "Técnico de Suporte em Informática"
 };
 
+export const careerDefaultPatterns: { [key: string]: string } = {
+  auxiliar_de_seguranca: "104",
+  assistente_administrativo: "105",
+  tecnico_administrativo: "201",
+  taquigrafo_i: "202",
+  tecnico_suporte_informatica: "205",
+  programador_computador: "206",
+  jornalista: "301",
+  assistente_social: "302",
+  analista_comissoes: "304",
+  analista_economico: "305",
+  analista_legislativo: "306",
+  contador: "308",
+  enfermeiro: "309",
+  redator: "311",
+  analista_sistemas: "313",
+  procurador_juridico: "314",
+  analista_adm_rh: "",
+  bibliotecario: "",
+  taquigrafo_ii: ""
+};
+
+const normalizeCareerText = (value?: string): string => {
+  if (!value) return '';
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+export function resolveCareerKey(careerOrCargo?: string): string {
+  if (!careerOrCargo) return '';
+  if (careerDisplayNames[careerOrCargo] || careerDefaultPatterns[careerOrCargo] !== undefined) {
+    return careerOrCargo;
+  }
+  const normalizedInput = normalizeCareerText(careerOrCargo);
+  if (!normalizedInput) return '';
+
+  for (const [key, displayName] of Object.entries(careerDisplayNames)) {
+    if (normalizeCareerText(key) === normalizedInput || normalizeCareerText(displayName) === normalizedInput) {
+      return key;
+    }
+  }
+  return '';
+}
+
+export function resolveCareerPattern(
+  careerOrCargo?: string,
+  patternsMap: { [key: string]: string } = careerDefaultPatterns
+): string {
+  const key = resolveCareerKey(careerOrCargo);
+  if (!key) return '';
+  const customVal = patternsMap[key];
+  if (customVal !== undefined && customVal !== '') return customVal;
+  return careerDefaultPatterns[key] || '';
+}
+
 export const careerData: { [key: string]: { [band: string]: number } } = {
   auxiliar_de_seguranca: {
     'I': 2869.21, 'II': 3014.09, 'III': 3164.75, 'IV': 3323.08, 'V': 3489.13, 'VI': 3663.71,

@@ -183,6 +183,10 @@ export async function getSavedSimulations(): Promise<UnifiedSimulation[]> {
 export async function saveSimulation(sim: UnifiedSimulation): Promise<void> {
   try {
     sim.updatedAt = new Date().toISOString();
+    const currentDraft = getDraftSimulation();
+    if (currentDraft && currentDraft.id === sim.id) {
+      saveDraftSimulation({ ...sim });
+    }
     await writeFirestoreSimulation(sim);
     
     // Server API Sync when offline

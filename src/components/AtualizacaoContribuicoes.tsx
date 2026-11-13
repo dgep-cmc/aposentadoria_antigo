@@ -24,7 +24,7 @@ interface EvaluatedRow {
   updatedValue: number;
 }
 
-export default function AtualizacaoContribuicoes() {
+export default function AtualizacaoContribuicoes({ embedded = false }: { embedded?: boolean }) {
   const cacheKey = 'dgep_atualizacao_data';
   
   const savedFatores = getSavedFatoresINSS();
@@ -186,17 +186,19 @@ export default function AtualizacaoContribuicoes() {
   };
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
+    <div className={embedded ? 'space-y-6 pt-2' : 'space-y-6 max-w-5xl mx-auto'}>
       {/* Inputs block */}
-      <div className="bg-white border border-[#dee2e6] rounded-xl shadow-xs p-6 sm:p-8 space-y-6">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-gray-800">
-            Atualização de Salários de Contribuição
-          </h1>
-          <p className="text-gray-500 text-xs sm:text-sm mt-1">
-            Correção e atualização monetária em massa de salários de contribuição a partir de indexação regulamentar
-          </p>
-        </div>
+      <div className={embedded ? 'space-y-6' : 'bg-white border border-[#dee2e6] rounded-xl shadow-xs p-6 sm:p-8 space-y-6'}>
+        {!embedded && (
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-800">
+              Atualização de Salários de Contribuição
+            </h1>
+            <p className="text-gray-500 text-xs sm:text-sm mt-1">
+              Correção e atualização monetária em massa de salários de contribuição a partir de indexação regulamentar
+            </p>
+          </div>
+        )}
 
         {errorMsg && (
           <div className="flex gap-2.5 p-4 bg-red-50 text-red-800 border border-red-200 rounded-lg leading-relaxed text-xs sm:text-sm">

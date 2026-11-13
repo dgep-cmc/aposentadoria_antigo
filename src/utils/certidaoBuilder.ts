@@ -1,5 +1,6 @@
 import { UnifiedSimulation } from './simulationsStore';
 import { CertidaoData, gerarCertidaoAposentadoriaPadraoPDF } from './exportCertidaoPDF';
+import { getPatternForCareer } from './settingsStore';
 import { 
   CertidaoEmitida, 
   salvarCertidaoEmitida, 
@@ -9,9 +10,10 @@ import {
 
 const formatBR = (dateStr?: string) => {
   if (!dateStr) return '';
-  const parts = dateStr.split('-');
+  const clean = dateStr.split('T')[0].trim();
+  const parts = clean.split('-');
   if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-  return dateStr;
+  return clean;
 };
 
 const parseDate = (dateStr?: string): Date | null => {
@@ -30,6 +32,165 @@ const parseDate = (dateStr?: string): Date | null => {
   const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00`);
   return isNaN(d.getTime()) ? null : d;
 };
+
+function calcularTempoRPPSCertidao(d1: Date, d2: Date) {
+  const d2_exclusive = new Date(d2.getTime());
+  d2_exclusive.setDate(d2_exclusive.getDate() + 1);
+
+  let years = 0;
+  let months = 0;
+  let current = new Date(d1.getTime());
+
+  while (true) {
+    const nextYear = new Date(current.getTime());
+    nextYear.setFullYear(current.getFullYear() + 1);
+    if (nextYear.getTime() <= d2_exclusive.getTime()) {
+      current = nextYear;
+      years++;
+    } else {
+      break;
+    }
+  }
+
+  while (true) {
+    const nextMonth = new Date(current.getTime());
+    const currentDay = current.getDate();
+    nextMonth.setMonth(current.getMonth() + 1);
+    if (nextMonth.getDate() < currentDay) {
+      nextMonth.setDate(0);
+    }
+    if (nextMonth.getTime() <= d2_exclusive.getTime()) {
+      current = nextMonth;
+      months++;
+    } else {
+      break;
+    }
+  }
+
+  const diffMs = d2_exclusive.getTime() - current.getTime();
+  const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  return { years, months, days };
+}
+
+export function calcularDiasIncorporacao(inc: UnifiedSimulation['incorporacoes'][number]): number {
+  if (inc.useDates && inc.dataInicio && inc.dataFim) {
+    const d1 = new Date(inc.dataInicio.includes('T') ? inc.dataInicio : `${inc.dataInicio}T12:00:00`);
+    const d2 = new Date(inc.dataFim.includes('T') ? inc.dataFim : `${inc.dataFim}T12:00:00`);
+    if (!isNaN(d1.getTime()) && !isNaN(d2.getTime()) && d2 >= d1) {
+      const rpps = calcularTempoRPPSCertidao(d1, d2);
+      return (rpps.years * 365) + (rpps.months * 30) + rpps.days;
+    }
+  }
+  return ((inc.years || 0) * 365) + ((inc.months || 0) * 30) + (inc.days || 0);
+}
+
+const formatarYMD = (totalDias: number) => {
+  const anos = Math.floor(totalDias / 365);
+  const meses = Math.floor((totalDias % 365) / 30);
+  const dias = (totalDias % 365) % 30;
+  return `${anos}a ${meses}m ${dias}d`;
+};
+
+export function extrairTemposIncorporacoes(
+  incorporacoes: UnifiedSimulation['incorporacoes'] | undefined,
+  includeSimulated = true
+) {
+  let diasFicto = 0;
+  let diasRecibado = 0;
+  let diasOutrasEst = 0;
+  let diasOutrasCLT = 0;
+  let diasPenalidades = 0;
+  let diasINSSIncs = 0;
+  const inssDescs: string[] = [];
+
+  const activeIncs = (incorporacoes || []).filter(inc =>
+    includeSimulated ? true : inc.status !== 'simular'
+  );
+
+  for (const inc of activeIncs) {
+    const t = (inc.tipo || '').toLowerCase();
+    const n = (inc.nome || '').toLowerCase();
+    const dias = calcularDiasIncorporacao(inc);
+
+    const isPenalidade =
+      t.includes('falta') || t.includes('suspens') || t.includes('penalidade') ||
+      n.includes('falta') || n.includes('suspens');
+    if (isPenalidade) {
+      diasPenalidades += dias;
+      continue;
+    }
+
+    const isFicta =
+      t.includes('licenca') || t.includes('licença') || t.includes('premio') ||
+      t.includes('prêmio') || t.includes('ficto') || t.includes('fícto') ||
+      n.includes('licença') || n.includes('licenca') || n.includes('premio') || n.includes('prêmio');
+    if (isFicta) {
+      diasFicto += dias;
+      continue;
+    }
+
+    const isRecibado = t.includes('recibado') || n.includes('recibado');
+    if (isRecibado) {
+      diasRecibado += dias;
+      continue;
+    }
+
+    const isINSS =
+      t === 'contribution-only' ||
+      t === 'pre-1994' ||
+      t.includes('inss') ||
+      t.includes('rgps') ||
+      (t !== 'all-effects' && (n.includes('inss') || n.includes('rgps')));
+    if (isINSS) {
+      diasINSSIncs += dias;
+      if (dias > 0) {
+        const nomeLimpo = (inc.nome || '').trim();
+        if (nomeLimpo) {
+          if (inc.useDates && inc.dataInicio && inc.dataFim) {
+            inssDescs.push(`${nomeLimpo} (${formatBR(inc.dataInicio)} a ${formatBR(inc.dataFim)})`);
+          } else {
+            inssDescs.push(nomeLimpo);
+          }
+        } else if (inc.dataInicio && inc.dataFim) {
+          inssDescs.push(`${formatBR(inc.dataInicio)} a ${formatBR(inc.dataFim)}`);
+        } else if (t === 'contribution-only') {
+          inssDescs.push(`Tempo e contribuição pós-07/1994 (${formatarYMD(dias)})`);
+        } else if (t === 'pre-1994') {
+          inssDescs.push(`Apenas tempo pré-07/1994 (${formatarYMD(dias)})`);
+        } else {
+          inssDescs.push(`CTC/INSS averbada (${formatarYMD(dias)})`);
+        }
+      }
+      continue;
+    }
+
+    const isCLT =
+      (t.includes('clt') || n.includes('clt')) &&
+      !t.includes('municipal') &&
+      !n.includes('municipal');
+    if (isCLT) {
+      diasOutrasCLT += dias;
+      continue;
+    }
+
+    const isEstatutario =
+      t === 'all-effects' ||
+      ((t.includes('estatut') || n.includes('estatut')) && !t.includes('cmc') && !n.includes('cmc'));
+    if (isEstatutario) {
+      diasOutrasEst += dias;
+    }
+  }
+
+  return {
+    diasFicto,
+    diasRecibado,
+    diasOutrasEst,
+    diasOutrasCLT,
+    diasPenalidades,
+    diasINSSIncs,
+    inssDesc: inssDescs.join('; ')
+  };
+}
 
 /**
  * Constrói o objeto completo de CertidaoData a partir de uma Simulação Unificada
@@ -83,30 +244,16 @@ export function construirCertidaoAPartirDeSimulacao(
     : 0;
   const diferencaDias = Math.max(0, diasCMC - diasAte31Dez2021);
 
+  const incs = extrairTemposIncorporacoes(sim.incorporacoes, tipo !== 'oficial');
+
   // 3. Tempo Fícto (licenças-prêmio incorporadas – CMC)
-  let diasFicto = 0;
-  const fictas = (sim.incorporacoes || []).filter(inc => {
-    const t = (inc.tipo || '').toLowerCase();
-    const n = (inc.nome || '').toLowerCase();
-    return t.includes('licenca') || t.includes('licença') || t.includes('premio') || t.includes('prêmio') || t.includes('ficto') || t.includes('fícto') || n.includes('licença') || n.includes('premio');
-  });
-  if (fictas.length > 0) {
-    diasFicto = fictas.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-  }
+  const diasFicto = incs.diasFicto;
   const anosFicto = Math.floor(diasFicto / 365);
   const mesesFicto = Math.floor((diasFicto % 365) / 30);
   const diasRestFicto = (diasFicto % 365) % 30;
 
   // 4. Tempo de Serviço Público Municipal (Recibado)
-  let diasRecibado = 0;
-  const recibados = (sim.incorporacoes || []).filter(inc => {
-    const t = (inc.tipo || '').toLowerCase();
-    const n = (inc.nome || '').toLowerCase();
-    return t.includes('recibado') || n.includes('recibado');
-  });
-  if (recibados.length > 0) {
-    diasRecibado = recibados.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-  }
+  const diasRecibado = incs.diasRecibado;
   const anosRecibado = Math.floor(diasRecibado / 365);
   const mesesRecibado = Math.floor((diasRecibado % 365) / 30);
   const diasRestRecibado = (diasRecibado % 365) % 30;
@@ -131,29 +278,13 @@ export function construirCertidaoAPartirDeSimulacao(
   const diasRestCLT = (diasCLT % 365) % 30;
 
   // 6. Outras incorporações Estatutário
-  let diasOutrasEst = 0;
-  const outrasEst = (sim.incorporacoes || []).filter(inc => {
-    const t = (inc.tipo || '').toLowerCase();
-    const n = (inc.nome || '').toLowerCase();
-    return (t.includes('estatut') || n.includes('estatut')) && !t.includes('cmc') && !n.includes('cmc');
-  });
-  if (outrasEst.length > 0) {
-    diasOutrasEst = outrasEst.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-  }
+  const diasOutrasEst = incs.diasOutrasEst;
   const anosOutrasEst = Math.floor(diasOutrasEst / 365);
   const mesesOutrasEst = Math.floor((diasOutrasEst % 365) / 30);
   const diasRestOutrasEst = (diasOutrasEst % 365) % 30;
 
   // 7. Outras incorporações CLT
-  let diasOutrasCLT = 0;
-  const outrasCLT = (sim.incorporacoes || []).filter(inc => {
-    const t = (inc.tipo || '').toLowerCase();
-    const n = (inc.nome || '').toLowerCase();
-    return (t.includes('clt') || n.includes('clt')) && !t.includes('municipal') && !n.includes('municipal');
-  });
-  if (outrasCLT.length > 0) {
-    diasOutrasCLT = outrasCLT.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-  }
+  const diasOutrasCLT = incs.diasOutrasCLT;
   const anosOutrasCLT = Math.floor(diasOutrasCLT / 365);
   const mesesOutrasCLT = Math.floor((diasOutrasCLT % 365) / 30);
   const diasRestOutrasCLT = (diasOutrasCLT % 365) % 30;
@@ -165,15 +296,7 @@ export function construirCertidaoAPartirDeSimulacao(
   const diasRestAfastamento = (diasAfastamento % 365) % 30;
 
   // 9. Penalidades Administrativas
-  let diasPenalidades = 0;
-  const penalidades = (sim.incorporacoes || []).filter(inc => {
-    const t = (inc.tipo || '').toLowerCase();
-    const n = (inc.nome || '').toLowerCase();
-    return t.includes('falta') || t.includes('suspens') || t.includes('penalidade') || n.includes('falta') || n.includes('suspens');
-  });
-  if (penalidades.length > 0) {
-    diasPenalidades = penalidades.reduce((acc, inc) => acc + (inc.years * 365 + inc.months * 30 + inc.days), 0);
-  }
+  const diasPenalidades = incs.diasPenalidades;
   const anosPenalidades = Math.floor(diasPenalidades / 365);
   const mesesPenalidades = Math.floor((diasPenalidades % 365) / 30);
   const diasRestPenalidades = (diasPenalidades % 365) % 30;
@@ -186,20 +309,12 @@ export function construirCertidaoAPartirDeSimulacao(
   const diasRestPublico = remPublico % 30;
 
   // 11. INSS / Iniciativa Privada
-  const diasINSS = sim.diasAverbadosINSS || 0;
+  const diasINSS = (sim.diasAverbadosINSS || 0) + incs.diasINSSIncs;
   const anosINSS = Math.floor(diasINSS / 365);
   const mesesINSS = Math.floor((diasINSS % 365) / 30);
   const diasRestINSS = (diasINSS % 365) % 30;
 
-  let inssDesc = '';
-  const inssIncs = (sim.incorporacoes || []).filter(inc => {
-    const t = (inc.tipo || '').toLowerCase();
-    const n = (inc.nome || '').toLowerCase();
-    return t.includes('inss') || t.includes('rgps') || n.includes('inss') || n.includes('rgps');
-  });
-  if (inssIncs.length > 0) {
-    inssDesc = inssIncs.map(inc => inc.nome || (inc.dataInicio && inc.dataFim ? `${formatBR(inc.dataInicio)} a ${formatBR(inc.dataFim)}` : '')).filter(Boolean).join('; ');
-  }
+  let inssDesc = incs.inssDesc;
   if (!inssDesc && diasINSS > 0) {
     inssDesc = 'Certidão de Tempo de Contribuição CTC/INSS averbada';
   }
@@ -239,7 +354,7 @@ export function construirCertidaoAPartirDeSimulacao(
       idadeEm31Dez2021: idade31Dez2021,
       orgao: 'Câmara Municipal de Curitiba',
       cargo: (sim.cargo || sim.selectedCareer || 'Servidor Público Municipal').replace(/_/g, ' '),
-      padrao: sim.padrao || '306',
+      padrao: sim.padrao || getPatternForCareer(sim.selectedCareer || sim.cargo) || '',
       referencia: sim.referencia || sim.selectedLevel || 'I',
       dataAdmissaoServicoPublico: dataAdmissaoSP,
       dataAdmissaoEstatutario: formatBR(dataEstatutario),
@@ -388,8 +503,13 @@ export function emitirCertidaoSimulacao(sim: UnifiedSimulation, emitidoPor?: str
  * Emite uma Certidão Oficial com controle numérico sequencial e registra no histórico
  */
 export function emitirCertidaoOficial(sim: UnifiedSimulation, emitidoPor?: string, numeroDefinido?: string): CertidaoData {
-  const numero = numeroDefinido || consumirProximoNumeroOficial();
-  const certidaoData = construirCertidaoAPartirDeSimulacao(sim, { tipo: 'oficial', numeroPersonalizado: numero });
+  const proximoSugerido = getProximoNumeroOficial();
+  const numeroLimpo = (numeroDefinido || '').trim();
+  const numero =
+    !numeroLimpo || numeroLimpo === 'SIMULAÇÃO' || numeroLimpo === proximoSugerido
+      ? consumirProximoNumeroOficial()
+      : numeroLimpo;
+  const certidaoData = construirCertidaoAPartirDeSimulacao(sim, { tipo: 'oficial', tipoCertidao: 'aposentadoria', numeroPersonalizado: numero });
 
   gerarCertidaoAposentadoriaPadraoPDF(certidaoData);
 
@@ -444,7 +564,12 @@ export function emitirCertidaoAbonoSimulacao(sim: UnifiedSimulation, emitidoPor?
  * Emite uma Certidão Oficial de Abono de Permanência com controle numérico sequencial
  */
 export function emitirCertidaoAbonoOficial(sim: UnifiedSimulation, emitidoPor?: string, numeroDefinido?: string): CertidaoData {
-  const numero = numeroDefinido || consumirProximoNumeroOficial();
+  const proximoSugerido = getProximoNumeroOficial();
+  const numeroLimpo = (numeroDefinido || '').trim();
+  const numero =
+    !numeroLimpo || numeroLimpo === 'SIMULAÇÃO' || numeroLimpo === proximoSugerido
+      ? consumirProximoNumeroOficial()
+      : numeroLimpo;
   const certidaoData = construirCertidaoAPartirDeSimulacao(sim, { tipo: 'oficial', tipoCertidao: 'abono_permanencia', numeroPersonalizado: numero });
   gerarCertidaoAposentadoriaPadraoPDF(certidaoData);
 
