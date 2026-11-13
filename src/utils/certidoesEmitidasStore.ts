@@ -6,6 +6,7 @@ export interface CertidaoEmitida {
   tipo: 'oficial' | 'simulacao';
   dataCertidao: string; // "22/10/2026"
   dataEmissaoTimestamp: string; // ISO date
+  ultimaEdicaoTimestamp?: string; // ISO date quando editada posteriormente
   servidorNome: string;
   matricula: string;
   cargo: string;
@@ -15,8 +16,11 @@ export interface CertidaoEmitida {
   snapshot: CertidaoData;
 }
 
+export type TipoCertidaoSequencial = 'aposentadoria' | 'abono_permanencia';
+
 const STORAGE_KEY = 'dgep_certidoes_emitidas';
-const SEQ_STORAGE_KEY_PREFIX = 'dgep_certidao_seq_';
+const SEQ_APOSENTADORIA_KEY_PREFIX = 'dgep_certidao_seq_';
+const SEQ_ABONO_KEY_PREFIX = 'dgep_certidao_abono_seq_';
 
 /**
  * Retorna todas as certidões emitidas salvas
@@ -48,6 +52,27 @@ export function salvarCertidaoEmitida(item: CertidaoEmitida): void {
 }
 
 /**
+ * Atualiza uma certidão já emitida no histórico sem alterar a contagem sequencial oficial
+ */
+export function atualizarCertidaoEmitida(item: CertidaoEmitida): void {
+  try {
+    const current = getCertidoesEmitidas();
+    const index = current.findIndex(c => c.id === item.id);
+    const enriched: CertidaoEmitida = {
+      ...item,
+      ultimaEdicaoTimestamp: new Date().toISOString()
+    };
+    const updated =
+      index >= 0
+        ? current.map((c, idx) => (idx === index ? enriched : c))
+        : [enriched, ...current];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  } catch (e) {
+    console.error('Erro ao atualizar certidão emitida:', e);
+  }
+}
+
+/**
  * Remove uma certidão do histórico
  */
 export function excluirCertidaoEmitida(id: string): void {
@@ -69,27 +94,47 @@ export function limparHistoricoCertidoes(): void {
   } catch (e) {}
 }
 
+function resolveSequenceConfig(tipoCertidao: TipoCertidaoSequencial, anoAtual: number): { storageKey: string; nextNum: number } {
+  const isAbono = tipoCertidao === 'abono_permanencia';
+  const storageKey = `${isAbono ? SEQ_ABONO_KEY_PREFIX : SEQ_APOSENTADORIA_KEY_PREFIX}${anoAtual}`;
+  const savedSeq = localStorage.getItem(storageKey);
+
+  let nextNum: number;
+  if (savedSeq !== null) {
+    nextNum = parseInt(savedSeq, 10) + 1;
+  } else if (isAbono) {
+    // Inicia sequência independente de Abono em 01/AAAA (ou próximo disponível caso já exista abono oficial no ano)
+    const anoSuffix = `/${anoAtual}`;
+    const existingMax = getCertidoesEmitidas()
+      .filter(c => c.tipo === 'oficial' && c.snapshot?.tipoCertidao === 'abono_permanencia' && c.numeroCertidao?.endsWith(anoSuffix))
+      .reduce((max, c) => {
+        const parsed = parseInt(c.numeroCertidao.split('/')[0], 10);
+        return !isNaN(parsed) && parsed > max ? parsed : max;
+      }, 0);
+    nextNum = existingMax > 0 ? existingMax + 1 : 1;
+  } else {
+    nextNum = 4; // Inicializa Aposentadoria em 04/2026 pois o exemplo modelo oficial é 03/2026
+  }
+
+  if (isNaN(nextNum) || nextNum < 1) nextNum = 1;
+  return { storageKey, nextNum };
+}
+
 /**
  * Obtém o próximo número sequencial oficial da certidão sem incrementá-lo
  */
-export function getProximoNumeroOficial(): string {
+export function getProximoNumeroOficial(tipoCertidao: TipoCertidaoSequencial = 'aposentadoria'): string {
   const anoAtual = new Date().getFullYear();
-  const storageKey = `${SEQ_STORAGE_KEY_PREFIX}${anoAtual}`;
-  const savedSeq = localStorage.getItem(storageKey);
-  let nextNum = savedSeq ? parseInt(savedSeq, 10) + 1 : 4; // Inicializa em 04/2026 pois o exemplo modelo oficial é 03/2026
-  if (isNaN(nextNum) || nextNum < 1) nextNum = 1;
+  const { nextNum } = resolveSequenceConfig(tipoCertidao, anoAtual);
   return `${String(nextNum).padStart(2, '0')}/${anoAtual}`;
 }
 
 /**
- * Confirma e consome o próximo número sequencial oficial da certidão
+ * Confirma e consome o próximo número sequencial oficial da certidão conforme seu tipo
  */
-export function consumirProximoNumeroOficial(): string {
+export function consumirProximoNumeroOficial(tipoCertidao: TipoCertidaoSequencial = 'aposentadoria'): string {
   const anoAtual = new Date().getFullYear();
-  const storageKey = `${SEQ_STORAGE_KEY_PREFIX}${anoAtual}`;
-  const savedSeq = localStorage.getItem(storageKey);
-  let nextNum = savedSeq ? parseInt(savedSeq, 10) + 1 : 4;
-  if (isNaN(nextNum) || nextNum < 1) nextNum = 1;
+  const { storageKey, nextNum } = resolveSequenceConfig(tipoCertidao, anoAtual);
   localStorage.setItem(storageKey, String(nextNum));
   return `${String(nextNum).padStart(2, '0')}/${anoAtual}`;
 }

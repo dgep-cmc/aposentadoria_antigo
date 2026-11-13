@@ -106,6 +106,33 @@ export function resolveCareerPattern(
   return careerDefaultPatterns[key] || '';
 }
 
+const LOWERCASE_CONNECTORS = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'em', 'à', 'às', 'para']);
+
+export function getCareerDisplayName(careerOrCargo?: string): string {
+  if (!careerOrCargo) return '';
+  const key = resolveCareerKey(careerOrCargo);
+  if (key && careerDisplayNames[key]) {
+    return careerDisplayNames[key];
+  }
+  const trimmed = careerOrCargo.trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('_')) {
+    return trimmed
+      .split('_')
+      .filter(Boolean)
+      .map((word, idx) => {
+        const lower = word.toLowerCase();
+        if (idx > 0 && LOWERCASE_CONNECTORS.has(lower)) return lower;
+        if (lower === 'i' || lower === 'ii' || lower === 'iii' || lower === 'rh') {
+          return lower.toUpperCase();
+        }
+        return lower.charAt(0).toUpperCase() + lower.slice(1);
+      })
+      .join(' ');
+  }
+  return trimmed;
+}
+
 export const careerData: { [key: string]: { [band: string]: number } } = {
   auxiliar_de_seguranca: {
     'I': 2869.21, 'II': 3014.09, 'III': 3164.75, 'IV': 3323.08, 'V': 3489.13, 'VI': 3663.71,

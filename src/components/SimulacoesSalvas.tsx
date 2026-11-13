@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getSavedSimulations, deleteSimulation, saveSimulation, UnifiedSimulation } from '../utils/simulationsStore';
+import { getCareerDisplayName } from '../data/careers';
 import { FileText, Trash2, Calendar, User, Briefcase, PlaySquare, ArrowUpDown, ChevronDown, ChevronUp, AlertTriangle, Copy, FileCheck } from 'lucide-react';
 
 interface SimulacoesSalvasProps {
@@ -160,9 +161,9 @@ export default function SimulacoesSalvas({ onNavigate }: SimulacoesSalvasProps) 
                           <User size={14} className="text-gray-400" />
                           {sim.nome || 'Servidor Sem Nome'}
                         </div>
-                        <div className="text-xs text-gray-500 flex items-center gap-1.5 mt-1 uppercase w-full truncate max-w-[300px]">
+                        <div className="text-xs text-gray-500 flex items-center gap-1.5 mt-1 w-full truncate max-w-[300px]">
                           <Briefcase size={12} className="text-[#004b8d]" />
-                          {(sim.cargo || sim.selectedCareer).replace(/_/g, ' ')}
+                          {getCareerDisplayName(sim.cargo || sim.selectedCareer)}
                         </div>
                       </td>
                       <td className="p-4 font-mono text-xs">{sim.matricula || '---'}</td>

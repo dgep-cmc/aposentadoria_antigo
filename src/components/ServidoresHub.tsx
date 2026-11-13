@@ -26,7 +26,8 @@ import {
   Download,
   ClipboardList,
   ShieldCheck,
-  FileBadge
+  FileBadge,
+  Pencil
 } from 'lucide-react';
 import {
   UnifiedSimulation,
@@ -38,6 +39,7 @@ import {
   createNewSimulation
 } from '../utils/simulationsStore';
 import { getSavedFatoresINSS, getPatternForCareer } from '../utils/settingsStore';
+import { getCareerDisplayName } from '../data/careers';
 import {
   CertidaoEmitida,
   getCertidoesEmitidas,
@@ -117,6 +119,7 @@ export default function ServidoresHub({
   const [certTypeFilter, setCertTypeFilter] = useState<CertTypeFilter>('todas');
   const [certSearchTerm, setCertSearchTerm] = useState('');
   const [deleteCertTarget, setDeleteCertTarget] = useState<CertidaoEmitida | null>(null);
+  const [editCertIdToOpen, setEditCertIdToOpen] = useState<string | null>(null);
 
   const loadServidores = async () => {
     setLoadingLista(true);
@@ -268,7 +271,7 @@ export default function ServidoresHub({
       const nome = (item.nome || '').toLowerCase();
       const mat = (item.matricula || '').toLowerCase();
       const cpf = (item.cpf || '').toLowerCase();
-      const cargo = (item.cargo || item.selectedCareer || '').replace(/_/g, ' ').toLowerCase();
+      const cargo = getCareerDisplayName(item.cargo || item.selectedCareer).toLowerCase();
       return nome.includes(q) || mat.includes(q) || cpf.includes(q) || cargo.includes(q);
     });
 
@@ -342,7 +345,7 @@ export default function ServidoresHub({
         if (!q) return true;
         const nome = (s.nome || '').toLowerCase();
         const mat = (s.matricula || '').toLowerCase();
-        const cargo = (s.cargo || s.selectedCareer || '').replace(/_/g, ' ').toLowerCase();
+        const cargo = getCareerDisplayName(s.cargo || s.selectedCareer).toLowerCase();
         return nome.includes(q) || mat.includes(q) || cargo.includes(q);
       })
       .map(s => {
@@ -403,6 +406,17 @@ export default function ServidoresHub({
     setDeleteCertTarget(null);
     loadServidores();
     showToast('Registro de certidão removido do controle.');
+  };
+
+  const handleEditarCertidaoEmitida = (cert: CertidaoEmitida) => {
+    const matchedServidor = servidores.find(s => certMatchesServidor(cert, s));
+    if (matchedServidor) {
+      handleOpenServidor(matchedServidor, 'certidoes');
+    } else {
+      setActiveSection('certidoes');
+      setViewMode('dossie');
+    }
+    setEditCertIdToOpen(cert.id);
   };
 
   if (viewMode === 'lista') {
@@ -490,8 +504,8 @@ export default function ServidoresHub({
                 <strong className="text-sm sm:text-base text-gray-900 block">
                   {sim.nome || 'Servidor em Edição'} {sim.matricula ? `• Matrícula ${sim.matricula}` : ''}
                 </strong>
-                <span className="text-xs text-gray-600 capitalize">
-                  {(sim.cargo || sim.selectedCareer || '').replace(/_/g, ' ')} • Padrão{' '}
+                <span className="text-xs text-gray-600">
+                  {getCareerDisplayName(sim.cargo || sim.selectedCareer)} • Padrão{' '}
                   {sim.padrao || getPatternForCareer(sim.selectedCareer || sim.cargo) || '-'}
                 </span>
               </div>
@@ -627,9 +641,9 @@ export default function ServidoresHub({
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-gray-500 flex items-center gap-1.5 mt-1 uppercase truncate max-w-[320px]">
+                            <div className="text-xs text-gray-500 flex items-center gap-1.5 mt-1 truncate max-w-[320px]">
                               <Briefcase size={12} className="text-[#004b8d] shrink-0" />
-                              <span>{(item.cargo || item.selectedCareer || '').replace(/_/g, ' ')}</span>
+                              <span>{getCareerDisplayName(item.cargo || item.selectedCareer)}</span>
                               {padraoItem && (
                                 <span className="font-mono font-bold text-[#002f5a]">
                                   • Padrão {padraoItem}
@@ -916,7 +930,7 @@ export default function ServidoresHub({
                                 </div>
                                 <div className="text-[11px] text-gray-500">
                                   Mat. {s.matricula || '---'} •{' '}
-                                  {(s.cargo || s.selectedCareer || '').replace(/_/g, ' ')}
+                                  {getCareerDisplayName(s.cargo || s.selectedCareer)}
                                   {padraoItem ? ` (Padrão ${padraoItem})` : ''}
                                 </div>
                               </td>
@@ -1099,6 +1113,14 @@ export default function ServidoresHub({
                               </td>
                               <td className="p-3 text-right">
                                 <div className="flex justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEditarCertidaoEmitida(cert)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold rounded-lg transition-all cursor-pointer"
+                                    title="Editar certidão emitida sem alterar a contagem sequencial"
+                                  >
+                                    <Pencil size={12} /> Editar
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => gerarCertidaoAposentadoriaPadraoPDF(cert.snapshot)}
@@ -1423,6 +1445,9 @@ export default function ServidoresHub({
             saveDraftSimulation(updated);
           }}
           embedded={true}
+          initialEditCertId={editCertIdToOpen}
+          onClearInitialEditCert={() => setEditCertIdToOpen(null)}
+          onHistoricoChanged={loadServidores}
         />
       )}
     </div>

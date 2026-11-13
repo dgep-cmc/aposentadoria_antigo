@@ -18,7 +18,10 @@ import {
   Trash2,
   Search,
   Filter,
-  Save
+  Save,
+  Pencil,
+  X,
+  Calendar
 } from 'lucide-react';
 import { CertidaoData, gerarCertidaoAposentadoriaPadraoPDF } from '../utils/exportCertidaoPDF';
 import { 
@@ -28,12 +31,20 @@ import {
   saveSimulation, 
   UnifiedSimulation 
 } from '../utils/simulationsStore';
-import { construirCertidaoAPartirDeSimulacao, extrairTemposIncorporacoes } from '../utils/certidaoBuilder';
+import { 
+  construirCertidaoAPartirDeSimulacao, 
+  diffCalendarDays, 
+  calculateExactAge,
+  extrairTemposIncorporacoes
+} from '../utils/certidaoBuilder';
 import { getPatternForCareer } from '../utils/settingsStore';
+import { getCareerDisplayName } from '../data/careers';
 import { 
   CertidaoEmitida, 
+  TipoCertidaoSequencial,
   getCertidoesEmitidas, 
   salvarCertidaoEmitida, 
+  atualizarCertidaoEmitida,
   excluirCertidaoEmitida,
   getProximoNumeroOficial,
   consumirProximoNumeroOficial
@@ -63,7 +74,7 @@ export const DADOS_EXEMPLO_VALDEMIR: CertidaoData = {
   },
   marcos: {
     diasAteEmissao: 12073,
-    diasAte31Dez2021: 10317,
+    diasAte31Dez2021: 13440,
     diferencaDias: 1756
   },
   gradeTempo: {
@@ -265,9 +276,19 @@ interface GeradorCertidaoProps {
   externalSim?: UnifiedSimulation;
   onSyncSim?: (updatedSim: UnifiedSimulation) => void;
   embedded?: boolean;
+  initialEditCertId?: string | null;
+  onClearInitialEditCert?: () => void;
+  onHistoricoChanged?: () => void;
 }
 
-export default function GeradorCertidao({ externalSim, onSyncSim, embedded = false }: GeradorCertidaoProps = {}) {
+export default function GeradorCertidao({
+  externalSim,
+  onSyncSim,
+  embedded = false,
+  initialEditCertId,
+  onClearInitialEditCert,
+  onHistoricoChanged
+}: GeradorCertidaoProps = {}) {
   const [certidaoData, setCertidaoData] = useState<CertidaoData>(getCertidaoInicialVazia());
   const [activeTab, setActiveTab] = useState<'servidor' | 'grade' | 'regras' | 'lavratura' | 'preview' | 'historico'>('preview');
   const [savedSimulations, setSavedSimulations] = useState<UnifiedSimulation[]>([]);
@@ -279,12 +300,15 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
   const linkedSimMetaRef = React.useRef<{ id?: string; updatedAt?: string }>({});
   const hasManualEditsRef = React.useRef(false);
 
-  // Estado do Controle de Certidões Emitidas
+  // Estado do Controle de Certidões Emitidas e Edição Posterior
   const [historicoCertidoes, setHistoricoCertidoes] = useState<CertidaoEmitida[]>([]);
   const [filtroHistorico, setFiltroHistorico] = useState<'todas' | 'oficial' | 'simulacao'>('todas');
   const [buscaHistorico, setBuscaHistorico] = useState<string>('');
   const [somenteServidorAtual, setSomenteServidorAtual] = useState<boolean>(Boolean(externalSim));
   const [deleteHistTarget, setDeleteHistTarget] = useState<CertidaoEmitida | null>(null);
+  const [editingCertidao, setEditingCertidao] = useState<CertidaoEmitida | null>(null);
+  const [numeroAposentadoria, setNumeroAposentadoria] = useState<string>(() => getProximoNumeroOficial('aposentadoria'));
+  const [numeroAbono, setNumeroAbono] = useState<string>(() => getProximoNumeroOficial('abono_permanencia'));
 
   const carregarHistorico = () => {
     setHistoricoCertidoes(getCertidoesEmitidas());
@@ -352,6 +376,17 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
               return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : clean;
             };
             const s = restoredData.servidor;
+            const currentInssDesc = restoredData.gradeTempo?.tempoINSSPrivada?.periodoDesc || '';
+            const isGenericInssDesc =
+              !currentInssDesc ||
+              currentInssDesc.startsWith('Tempo e contribuição pós-07/1994 (') ||
+              currentInssDesc.startsWith('Apenas tempo pré-07/1994 (') ||
+              currentInssDesc.startsWith('CTC/INSS averbada (') ||
+              currentInssDesc === 'Certidão de Tempo de Contribuição CTC/INSS averbada';
+            const refreshedInssDesc = isGenericInssDesc
+              ? extrairTemposIncorporacoes(activeTargetSim.incorporacoes, !restoredData.isSimulacao ? false : true).inssDesc || currentInssDesc
+              : currentInssDesc;
+
             restoredData = {
               ...restoredData,
               servidor: {
@@ -361,16 +396,31 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
                 rg: s.rg || activeTargetSim.rg || '',
                 cpf: s.cpf || activeTargetSim.cpf || '',
                 dataNascimento: s.dataNascimento || toBr(activeTargetSim.dataNascimento) || '',
-                cargo: s.cargo || (activeTargetSim.cargo || activeTargetSim.selectedCareer || '').replace(/_/g, ' '),
+                cargo: s.cargo || getCareerDisplayName(activeTargetSim.cargo || activeTargetSim.selectedCareer) || '',
                 padrao: s.padrao || activeTargetSim.padrao || getPatternForCareer(activeTargetSim.selectedCareer || activeTargetSim.cargo) || '',
                 referencia: s.referencia || activeTargetSim.referencia || activeTargetSim.selectedLevel || 'I',
                 dataAdmissaoServicoPublico: s.dataAdmissaoServicoPublico || toBr(activeTargetSim.ingressoCmc || activeTargetSim.ingressoCargoAtual),
                 dataAdmissaoEstatutario: s.dataAdmissaoEstatutario || toBr(activeTargetSim.ingressoCargoAtual || activeTargetSim.ingressoCmc),
                 registroTribunalContas: s.registroTribunalContas || activeTargetSim.registroTribunalContas || ''
+              },
+              gradeTempo: {
+                ...restoredData.gradeTempo,
+                tempoINSSPrivada: {
+                  ...restoredData.gradeTempo.tempoINSSPrivada,
+                  periodoDesc: refreshedInssDesc
+                }
               }
             };
           }
           hasManualEditsRef.current = true;
+          const restoredNum = (restoredData.numeroCertidao || '').trim();
+          if (restoredNum && restoredNum !== 'SIMULAÇÃO' && restoredNum !== '03/2026') {
+            if (restoredData.tipoCertidao === 'abono_permanencia') {
+              setNumeroAbono(restoredNum);
+            } else {
+              setNumeroAposentadoria(restoredNum);
+            }
+          }
           setCertidaoData(restoredData);
           setSelectedSimId(savedCertidaoDraft.selectedSimId || activeTargetId);
           linkedSimMetaRef.current = {
@@ -393,9 +443,25 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
     loadData();
   }, []);
 
-  // Re-sincroniza automaticamente quando o cadastro externo do servidor mudar
+  // Entra automaticamente em edição se solicitado externamente (ex: Carteira / Controle Geral de Certidões)
   useEffect(() => {
-    if (!externalSim) return;
+    if (!initialEditCertId) return;
+    const all = getCertidoesEmitidas();
+    const target = all.find(c => c.id === initialEditCertId);
+    if (target) {
+      setHistoricoCertidoes(all);
+      setEditingCertidao(target);
+      hasManualEditsRef.current = true;
+      setCertidaoData(JSON.parse(JSON.stringify(target.snapshot)));
+      setActiveTab('preview');
+      triggerFeedback(`Modo de edição ativo para a certidão ${target.numeroCertidao}. Alterações não alteram a contagem sequencial.`);
+    }
+    onClearInitialEditCert?.();
+  }, [initialEditCertId]);
+
+  // Re-sincroniza automaticamente quando o cadastro externo do servidor mudar (exceto durante edição de certidão emitida)
+  useEffect(() => {
+    if (!externalSim || editingCertidao) return;
     if (
       linkedSimMetaRef.current.id !== externalSim.id ||
       linkedSimMetaRef.current.updatedAt !== externalSim.updatedAt
@@ -403,11 +469,11 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
       setDraftSimulation(externalSim);
       handleImportarSimulacao(externalSim.id, externalSim, true);
     }
-  }, [externalSim]);
+  }, [externalSim, editingCertidao]);
 
   // Persistir automaticamente edições feitas na certidão (incluindo aba Identificação Funcional e TCE-PR)
   useEffect(() => {
-    if (!isInitializedRef.current || externalSim) return;
+    if (!isInitializedRef.current || externalSim || editingCertidao) return;
     try {
       const envelope: CertidaoDraftEnvelope = {
         selectedSimId,
@@ -534,12 +600,76 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
     }
   };
 
-  // Gerador automatizado da numeração da certidão
-  const gerarProximoNumero = () => {
-    const novoNumero = consumirProximoNumeroOficial();
+  // Sugere o próximo número sequencial oficial independente conforme o tipo de certidão (sem consumir contagem)
+  const sugerirProximoNumero = (tipoTarget?: TipoCertidaoSequencial) => {
+    const tipoEfetivo: TipoCertidaoSequencial =
+      tipoTarget || (certidaoData.tipoCertidao === 'abono_permanencia' ? 'abono_permanencia' : 'aposentadoria');
+    const proximo = getProximoNumeroOficial(tipoEfetivo);
     hasManualEditsRef.current = true;
-    setCertidaoData(prev => ({ ...prev, numeroCertidao: novoNumero, isSimulacao: false }));
-    triggerFeedback(`Novo número sequencial da certidão gerado: ${novoNumero}`);
+    if (tipoEfetivo === 'abono_permanencia') {
+      setNumeroAbono(proximo);
+    } else {
+      setNumeroAposentadoria(proximo);
+    }
+    const tipoAtivoCertidao: TipoCertidaoSequencial =
+      certidaoData.tipoCertidao === 'abono_permanencia' ? 'abono_permanencia' : 'aposentadoria';
+    if (tipoAtivoCertidao === tipoEfetivo) {
+      setCertidaoData(prev => ({ ...prev, numeroCertidao: proximo, isSimulacao: false }));
+    }
+    const labelTipo = tipoEfetivo === 'abono_permanencia' ? 'Abono de Permanência' : 'Aposentadoria';
+    triggerFeedback(`Próximo número sugerido (${labelTipo}): ${proximo} (será reservado na emissão oficial).`);
+  };
+
+  const handleIniciarEdicaoCertidao = (item: CertidaoEmitida) => {
+    setEditingCertidao(item);
+    hasManualEditsRef.current = true;
+    setCertidaoData(JSON.parse(JSON.stringify(item.snapshot)));
+    setActiveTab('preview');
+    triggerFeedback(`Editando certidão ${item.numeroCertidao}. Alterações serão salvas sem alterar a contagem sequencial.`);
+  };
+
+  const handleSalvarEdicaoCertidao = (baixarPdf = false) => {
+    if (!editingCertidao) return;
+    try {
+      const numeroFinal = (certidaoData.numeroCertidao || '').trim() || editingCertidao.numeroCertidao;
+      const updatedSnapshot: CertidaoData = {
+        ...certidaoData,
+        numeroCertidao: numeroFinal
+      };
+      const grade = updatedSnapshot.gradeTempo.tempoTotalServicoContribuicao;
+      const isAbono = updatedSnapshot.tipoCertidao === 'abono_permanencia';
+      const updatedItem: CertidaoEmitida = {
+        ...editingCertidao,
+        numeroCertidao: numeroFinal,
+        dataCertidao: updatedSnapshot.dataCertidao,
+        servidorNome: updatedSnapshot.servidor.nome,
+        matricula: updatedSnapshot.servidor.matricula,
+        cargo: isAbono ? `${updatedSnapshot.servidor.cargo} (Abono de Permanência)` : updatedSnapshot.servidor.cargo,
+        tempoTotalDias: grade.totalDias,
+        tempoFormatado: `${grade.anos} anos, ${grade.meses} meses e ${grade.dias} dias`,
+        snapshot: updatedSnapshot
+      };
+      atualizarCertidaoEmitida(updatedItem);
+      setCertidaoData(updatedSnapshot);
+      carregarHistorico();
+      onHistoricoChanged?.();
+      setEditingCertidao(null);
+      if (baixarPdf) {
+        gerarCertidaoAposentadoriaPadraoPDF(updatedSnapshot);
+      }
+      triggerFeedback(`Certidão (${updatedItem.numeroCertidao}) salva com sucesso sem alterar a contagem sequencial!`);
+    } catch (e) {
+      console.error(e);
+      triggerFeedback('Erro ao salvar alterações da certidão.', true);
+    }
+  };
+
+  const handleCancelarEdicaoCertidao = () => {
+    setEditingCertidao(null);
+    if (externalSim) {
+      handleImportarSimulacao(externalSim.id, externalSim, true);
+    }
+    triggerFeedback('Edição posterior cancelada.');
   };
 
   // Função para recalcular os subtotais e totais da grade
@@ -583,285 +713,63 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
     };
   };
 
-  // Importação e vínculo automatizado com os dados da Simulação
+  // Importação e vínculo automatizado com os dados da Simulação (fonte única: certidaoBuilder)
   function handleImportarSimulacao(id: string, directSim?: UnifiedSimulation, silenciarFeedback = false) {
     const sim = directSim || (id === 'draft' ? (getDraftSimulation() || draftSimulation) : savedSimulations.find(s => s.id === id));
     if (!sim) return;
 
-    const formatBR = (dateStr?: string) => {
-      if (!dateStr) return '';
-      const clean = dateStr.split('T')[0].trim();
-      const parts = clean.split('-');
-      if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
-      return clean;
-    };
+    const tipoAtivo: TipoCertidaoSequencial =
+      certidaoData.tipoCertidao === 'abono_permanencia' ? 'abono_permanencia' : 'aposentadoria';
+    const numAposLimpo = (numeroAposentadoria || '').trim();
+    const numAbonoLimpo = (numeroAbono || '').trim();
+    const numAposFinal =
+      numAposLimpo && numAposLimpo !== '03/2026' && numAposLimpo !== 'SIMULAÇÃO'
+        ? numAposLimpo
+        : getProximoNumeroOficial('aposentadoria');
+    const numAbonoFinal =
+      numAbonoLimpo && numAbonoLimpo !== '03/2026' && numAbonoLimpo !== 'SIMULAÇÃO'
+        ? numAbonoLimpo
+        : getProximoNumeroOficial('abono_permanencia');
 
-    const parseDate = (dateStr?: string): Date | null => {
-      if (!dateStr) return null;
-      if (dateStr.includes('/')) {
-        const parts = dateStr.split('/');
-        if (parts.length === 3) {
-          const d = parseInt(parts[0], 10);
-          const m = parseInt(parts[1], 10) - 1;
-          const y = parseInt(parts[2], 10);
-          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-            return new Date(y, m, d);
-          }
-        }
-      }
-      const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T00:00:00`);
-      return isNaN(d.getTime()) ? null : d;
-    };
+    const numeroPersonalizado = tipoAtivo === 'abono_permanencia' ? numAbonoFinal : numAposFinal;
 
-    const today = new Date();
-    const emissaoStr = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
-    const emissaoExtenso = `${today.getDate()} de ${today.toLocaleDateString('pt-BR', { month: 'long' })} de ${today.getFullYear()}`;
+    const dataCustom =
+      linkedSimMetaRef.current.id === sim.id && certidaoData.dataCertidao
+        ? certidaoData.dataCertidao
+        : undefined;
 
-    // 1. Idade hoje e em 31/12/2021
-    let idadeHoje = 60;
-    let idade31Dez2021 = 55;
-    if (sim.dataNascimento) {
-      const bDate = parseDate(sim.dataNascimento);
-      if (bDate) {
-        idadeHoje = Math.floor((today.getTime() - bDate.getTime()) / (365.25 * 24 * 3600 * 1000));
-        const date2021 = new Date(2021, 11, 31);
-        idade31Dez2021 = Math.floor((date2021.getTime() - bDate.getTime()) / (365.25 * 24 * 3600 * 1000));
-      }
-    }
+    const baseCertidao = construirCertidaoAPartirDeSimulacao(sim, {
+      tipo: 'oficial',
+      tipoCertidao: tipoAtivo,
+      numeroPersonalizado,
+      dataCertidaoPersonalizada: dataCustom
+    });
 
-    // 2. Tempo Estatutário na CMC (de admissão estatutária até a data de emissão)
-    const dataEstatutario = sim.ingressoCargoAtual || sim.ingressoCmc || '1993-10-02';
-    const dateInicioEstatutario = parseDate(dataEstatutario) || new Date(1993, 9, 2);
-    const diasCMC = Math.max(0, Math.floor((today.getTime() - dateInicioEstatutario.getTime()) / (24 * 3600 * 1000)));
-    const anosCMC = Math.floor(diasCMC / 365);
-    const remDiasCMC = diasCMC % 365;
-    const mesesCMC = Math.floor(remDiasCMC / 30);
-    const diasRestCMC = remDiasCMC % 30;
-    const periodoCMC = `${formatBR(dataEstatutario)} a ${emissaoStr}`;
-
-    // Marcos temporais dinâmicos (data de emissão vs 31/12/2021)
-    const date31Dez2021 = new Date(2021, 11, 31);
-    const diasAte31Dez2021 = (dateInicioEstatutario && dateInicioEstatutario <= date31Dez2021)
-      ? Math.max(0, Math.floor((date31Dez2021.getTime() - dateInicioEstatutario.getTime()) / (24 * 3600 * 1000)))
-      : 0;
-    const diferencaDias = Math.max(0, diasCMC - diasAte31Dez2021);
-
-    const incs = extrairTemposIncorporacoes(sim.incorporacoes, true);
-
-    // 3. Tempo Fícto (licenças-prêmio incorporadas – CMC)
-    const diasFicto = incs.diasFicto;
-    const anosFicto = Math.floor(diasFicto / 365);
-    const mesesFicto = Math.floor((diasFicto % 365) / 30);
-    const diasRestFicto = (diasFicto % 365) % 30;
-
-    // 4. Tempo de Serviço Público Municipal (Recibado)
-    const diasRecibado = incs.diasRecibado;
-    const anosRecibado = Math.floor(diasRecibado / 365);
-    const mesesRecibado = Math.floor((diasRecibado % 365) / 30);
-    const diasRestRecibado = (diasRecibado % 365) % 30;
-
-    // 5. Tempo de Serviço Público Municipal (CLT) incorporado
-    let diasCLT = sim.diasAverbadosSP || 0;
-    let periodoCLT = '';
-    if (sim.ingressoCmc && sim.ingressoCargoAtual && sim.ingressoCmc < sim.ingressoCargoAtual) {
-      const dIngresso = parseDate(sim.ingressoCmc);
-      const dCargo = parseDate(sim.ingressoCargoAtual);
-      if (dIngresso && dCargo) {
-        const dVespera = new Date(dCargo.getTime() - 24 * 3600 * 1000);
-        const diasIntervalo = Math.floor((dCargo.getTime() - dIngresso.getTime()) / (24 * 3600 * 1000));
-        diasCLT = Math.max(diasCLT, diasIntervalo);
-        periodoCLT = `${formatBR(sim.ingressoCmc)} a ${formatBR(dVespera.toISOString().split('T')[0])}`;
-      }
-    } else if (diasCLT > 0) {
-      periodoCLT = 'Tempo averbado de serviço público anterior';
-    }
-    const anosCLT = Math.floor(diasCLT / 365);
-    const mesesCLT = Math.floor((diasCLT % 365) / 30);
-    const diasRestCLT = (diasCLT % 365) % 30;
-
-    // 5b. Outras incorporações de Tempo de Serviço Público (Estatutário)
-    const diasOutrasEst = incs.diasOutrasEst;
-    const anosOutrasEst = Math.floor(diasOutrasEst / 365);
-    const mesesOutrasEst = Math.floor((diasOutrasEst % 365) / 30);
-    const diasRestOutrasEst = (diasOutrasEst % 365) % 30;
-
-    // 5c. Outras incorporações de Tempo de Serviço Público (CLT)
-    const diasOutrasCLT = incs.diasOutrasCLT;
-    const anosOutrasCLT = Math.floor(diasOutrasCLT / 365);
-    const mesesOutrasCLT = Math.floor((diasOutrasCLT % 365) / 30);
-    const diasRestOutrasCLT = (diasOutrasCLT % 365) % 30;
-
-    // 5d. Afastamentos sem vencimento
-    const diasAfastamento = sim.diasAfastamento || 0;
-    const anosAfastamento = Math.floor(diasAfastamento / 365);
-    const mesesAfastamento = Math.floor((diasAfastamento % 365) / 30);
-    const diasRestAfastamento = (diasAfastamento % 365) % 30;
-
-    // 5e. Penalidades Administrativas, suspensão e faltas
-    const diasPenalidades = incs.diasPenalidades;
-    const anosPenalidades = Math.floor(diasPenalidades / 365);
-    const mesesPenalidades = Math.floor((diasPenalidades % 365) / 30);
-    const diasRestPenalidades = (diasPenalidades % 365) % 30;
-
-    // 6. Subtotal: TEMPO TOTAL DE SERVIÇO PÚBLICO
-    const totalPublicoDias = Math.max(0, diasCMC + diasFicto + diasRecibado + diasCLT + diasOutrasEst + diasOutrasCLT - diasAfastamento - diasPenalidades);
-    const anosPublico = Math.floor(totalPublicoDias / 365);
-    const remPublico = totalPublicoDias % 365;
-    const mesesPublico = Math.floor(remPublico / 30);
-    const diasRestPublico = remPublico % 30;
-
-    // 7. Tempo de Contribuição na iniciativa privada incorporado (INSS)
-    const diasINSS = (sim.diasAverbadosINSS || 0) + incs.diasINSSIncs;
-    const anosINSS = Math.floor(diasINSS / 365);
-    const mesesINSS = Math.floor((diasINSS % 365) / 30);
-    const diasRestINSS = (diasINSS % 365) % 30;
-
-    let inssDesc = incs.inssDesc;
-    if (!inssDesc && diasINSS > 0) {
-      inssDesc = 'Certidão de Tempo de Contribuição CTC/INSS averbada';
-    }
-
-    // 8. Total Geral: TEMPO TOTAL DE SERVIÇO / CONTRIBUIÇÃO
-    const totalGeralDias = totalPublicoDias + diasINSS;
-    const anosGeral = Math.floor(totalGeralDias / 365);
-    const remGeral = totalGeralDias % 365;
-    const mesesGeral = Math.floor(remGeral / 30);
-    const diasRestGeral = remGeral % 30;
-
-    // Sequencial de Certidão
-    const anoAtual = today.getFullYear();
-    const storageKey = `dgep_certidao_seq_${anoAtual}`;
-    const savedSeq = localStorage.getItem(storageKey);
-    const nextNum = savedSeq ? parseInt(savedSeq, 10) : 4;
-    const numeroGerado = `${String(nextNum).padStart(2, '0')}/${anoAtual}`;
-
-    const dataAdmissaoSP = sim.ingressoCmc ? formatBR(sim.ingressoCmc) : formatBR(dataEstatutario);
+    const isLavraturaPadrao =
+      !certidaoData.lavratura?.servidorNome ||
+      certidaoData.lavratura.servidorNome === 'Setor de Gestão de Processos e Benefícios Funcionais';
 
     const novaCertidao: CertidaoData = {
-      ...certidaoData,
-      numeroCertidao: certidaoData.numeroCertidao && certidaoData.numeroCertidao !== '03/2026' ? certidaoData.numeroCertidao : numeroGerado,
-      dataCertidao: emissaoStr,
-      servidor: {
-        nome: sim.nome || 'Servidor Municipal',
-        matricula: sim.matricula || '',
-        rg: sim.rg || '',
-        cpf: sim.cpf || '',
-        sexo: (sim.sexo === 'F' || (sim.sexo as string) === 'Feminino') ? 'Feminino' : 'Masculino',
-        cargo: (sim.cargo || sim.selectedCareer || 'Servidor Público Municipal').replace(/_/g, ' '),
-        dataNascimento: formatBR(sim.dataNascimento) || '',
-        idadeHoje,
-        idadeEm31Dez2021: idade31Dez2021,
-        orgao: 'Câmara Municipal de Curitiba',
-        padrao: sim.padrao || getPatternForCareer(sim.selectedCareer || sim.cargo) || '',
-        referencia: sim.referencia || sim.selectedLevel || 'I',
-        dataAdmissaoServicoPublico: dataAdmissaoSP,
-        dataAdmissaoEstatutario: formatBR(dataEstatutario),
-        dataRequerimento: emissaoStr,
-        registroTribunalContas: sim.registroTribunalContas || ''
-      },
-      marcos: {
-        diasAteEmissao: diasCMC,
-        diasAte31Dez2021: diasAte31Dez2021,
-        diferencaDias: diferencaDias
-      },
-      gradeTempo: {
-        tempoEstatutarioCMC: {
-          anos: anosCMC,
-          meses: mesesCMC,
-          dias: diasRestCMC,
-          totalDias: diasCMC,
-          periodoDesc: periodoCMC
-        },
-        tempoFictoLicencaPremio: {
-          anos: anosFicto,
-          meses: mesesFicto,
-          dias: diasRestFicto,
-          totalDias: diasFicto,
-          obs: 'Licenças-prêmio incorporadas – CMC'
-        },
-        tempoServicoPublicoRecibado: {
-          anos: anosRecibado,
-          meses: mesesRecibado,
-          dias: diasRestRecibado,
-          totalDias: diasRecibado
-        },
-        tempoServicoPublicoCLT: {
-          anos: anosCLT,
-          meses: mesesCLT,
-          dias: diasRestCLT,
-          totalDias: diasCLT,
-          periodoDesc: periodoCLT
-        },
-        outrasIncorporacoesEstatutario: {
-          anos: anosOutrasEst,
-          meses: mesesOutrasEst,
-          dias: diasRestOutrasEst,
-          totalDias: diasOutrasEst
-        },
-        outrasIncorporacoesCLT: {
-          anos: anosOutrasCLT,
-          meses: mesesOutrasCLT,
-          dias: diasRestOutrasCLT,
-          totalDias: diasOutrasCLT
-        },
-        afastamentosSemVencimento: {
-          anos: anosAfastamento,
-          meses: mesesAfastamento,
-          dias: diasRestAfastamento,
-          totalDias: diasAfastamento
-        },
-        penalidadesAdministrativas: {
-          anos: anosPenalidades,
-          meses: mesesPenalidades,
-          dias: diasRestPenalidades,
-          totalDias: diasPenalidades
-        },
-        tempoTotalServicoPublico: {
-          anos: anosPublico,
-          meses: mesesPublico,
-          dias: diasRestPublico,
-          totalDias: totalPublicoDias
-        },
-        tempoINSSPrivada: {
-          anos: anosINSS,
-          meses: mesesINSS,
-          dias: diasRestINSS,
-          totalDias: diasINSS,
-          periodoDesc: inssDesc
-        },
-        tempoTotalServicoContribuicao: {
-          anos: anosGeral,
-          meses: mesesGeral,
-          dias: diasRestGeral,
-          totalDias: totalGeralDias
-        }
-      },
-      temposExercicio: {
-        servicoPublicoTotal: {
-          anos: anosPublico,
-          meses: mesesPublico,
-          dias: diasRestPublico,
-          totalDias: totalPublicoDias,
-          periodoDesc: `${dataAdmissaoSP} a ${emissaoStr}`
-        },
-        cargoEfetivoTotal: {
-          anos: anosCMC,
-          meses: mesesCMC,
-          dias: diasRestCMC,
-          totalDias: diasCMC,
-          periodoDesc: periodoCMC
-        }
-      },
+      ...baseCertidao,
+      isSimulacao: false,
       regrasTransitorias: {
-        ...certidaoData.regrasTransitorias,
-        atsPercentual: (sim.lastAtsNumber || 0) * 5 || Math.min(50, Math.floor(anosCMC / 5) * 5),
-        idadeEm31Dez2021: idade31Dez2021,
-        tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
+        ...baseCertidao.regrasTransitorias,
+        recebeAbono:
+          linkedSimMetaRef.current.id === sim.id
+            ? certidaoData.regrasTransitorias.recebeAbono
+            : baseCertidao.regrasTransitorias.recebeAbono,
+        dataAbono:
+          linkedSimMetaRef.current.id === sim.id
+            ? certidaoData.regrasTransitorias.dataAbono
+            : baseCertidao.regrasTransitorias.dataAbono
       },
-      lavratura: {
-        ...certidaoData.lavratura,
-        data: emissaoExtenso
-      }
+      lavratura: isLavraturaPadrao
+        ? baseCertidao.lavratura
+        : {
+            ...certidaoData.lavratura,
+            data: baseCertidao.lavratura.data
+          },
+      dadosIPMC: certidaoData.dadosIPMC
     };
 
     hasManualEditsRef.current = false;
@@ -873,17 +781,17 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
     }
   };
 
-  const resolverNumeroOficialParaEmissao = (): string => {
-    const atual = (certidaoData.numeroCertidao || '').trim();
-    if (!atual || atual === 'SIMULAÇÃO' || atual === '03/2026' || atual === getProximoNumeroOficial()) {
-      return consumirProximoNumeroOficial();
+  const resolverNumeroOficialParaEmissao = (tipo: TipoCertidaoSequencial): string => {
+    const atual = (tipo === 'abono_permanencia' ? numeroAbono : numeroAposentadoria).trim();
+    if (!atual || atual === 'SIMULAÇÃO' || atual === '03/2026' || atual === getProximoNumeroOficial(tipo)) {
+      return consumirProximoNumeroOficial(tipo);
     }
     return atual;
   };
 
   const handleEmitirPadrao = () => {
     try {
-      const numeroOficial = resolverNumeroOficialParaEmissao();
+      const numeroOficial = resolverNumeroOficialParaEmissao('aposentadoria');
       const oficialData: CertidaoData = {
         ...certidaoData,
         numeroCertidao: numeroOficial,
@@ -892,6 +800,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
       };
       gerarCertidaoAposentadoriaPadraoPDF(oficialData);
       setCertidaoData(oficialData);
+      setNumeroAposentadoria(getProximoNumeroOficial('aposentadoria'));
 
       const grade = oficialData.gradeTempo.tempoTotalServicoContribuicao;
       salvarCertidaoEmitida({
@@ -909,7 +818,8 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
         snapshot: oficialData
       });
       carregarHistorico();
-      triggerFeedback(`Certidão Oficial nº ${numeroOficial} gerada e registrada no controle de emissões!`);
+      onHistoricoChanged?.();
+      triggerFeedback(`Certidão Oficial de Aposentadoria nº ${numeroOficial} gerada e registrada no controle de emissões!`);
     } catch (e) {
       console.error(e);
       triggerFeedback('Erro ao gerar o PDF da Certidão. Verifique os dados inseridos.', true);
@@ -942,6 +852,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
         snapshot: simData
       });
       carregarHistorico();
+      onHistoricoChanged?.();
       triggerFeedback('Certidão de Simulação (Minuta em PDF) gerada com sucesso e registrada no controle!');
     } catch (e) {
       console.error(e);
@@ -951,7 +862,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
 
   const handleEmitirAbonoOficial = () => {
     try {
-      const numeroOficial = resolverNumeroOficialParaEmissao();
+      const numeroOficial = resolverNumeroOficialParaEmissao('abono_permanencia');
       const abonoData: CertidaoData = {
         ...certidaoData,
         numeroCertidao: numeroOficial,
@@ -960,6 +871,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
       };
       gerarCertidaoAposentadoriaPadraoPDF(abonoData);
       setCertidaoData(abonoData);
+      setNumeroAbono(getProximoNumeroOficial('abono_permanencia'));
 
       const grade = abonoData.gradeTempo.tempoTotalServicoContribuicao;
       salvarCertidaoEmitida({
@@ -977,6 +889,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
         snapshot: abonoData
       });
       carregarHistorico();
+      onHistoricoChanged?.();
       triggerFeedback(`Certidão Oficial de Abono de Permanência nº ${numeroOficial} gerada e registrada!`);
     } catch (e) {
       console.error(e);
@@ -1010,6 +923,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
         snapshot: abonoSimData
       });
       carregarHistorico();
+      onHistoricoChanged?.();
       triggerFeedback('Certidão de Abono de Permanência (Simulação) gerada e registrada no histórico!');
     } catch (e) {
       console.error(e);
@@ -1031,6 +945,29 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
     return null;
   };
 
+  // Calcula os dias transcorridos após 31/12/2021 até a data de emissão para manter Marcos & Bloco 4 sempre coerentes
+  const calcularMarcosCoerentes = (dataCertidaoStr: string, dataAdmissaoEstStr: string, totalGeralDias: number) => {
+    const dFim = parseDateBR(dataCertidaoStr);
+    const dInicio = parseDateBR(dataAdmissaoEstStr);
+    const date31Dez2021 = new Date(2021, 11, 31);
+
+    let diferencaPos2021 = 0;
+    if (dFim && Date.UTC(dFim.getFullYear(), dFim.getMonth(), dFim.getDate()) > Date.UTC(2021, 11, 31)) {
+      const inicioPos2021 =
+        dInicio && Date.UTC(dInicio.getFullYear(), dInicio.getMonth(), dInicio.getDate()) > Date.UTC(2021, 11, 31)
+          ? dInicio
+          : date31Dez2021;
+      diferencaPos2021 = diffCalendarDays(inicioPos2021, dFim);
+    }
+
+    const diasAte31Dez2021 = Math.max(0, totalGeralDias - diferencaPos2021);
+    return {
+      diasAte31Dez2021,
+      diferencaDias: diferencaPos2021,
+      tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
+    };
+  };
+
   // Atualizador da Data da Certidão com vínculo em tempo real no período estatutário e marcos
   const updateDataCertidao = (novaData: string) => {
     hasManualEditsRef.current = true;
@@ -1041,7 +978,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
 
       let updatedServidor = { ...prev.servidor };
       if (dNasc && dFim) {
-        updatedServidor.idadeHoje = Math.max(0, Math.floor((dFim.getTime() - dNasc.getTime()) / (365.25 * 24 * 3600 * 1000)));
+        updatedServidor.idadeHoje = calculateExactAge(dNasc, dFim);
       }
 
       let updatedGrade = { ...prev.gradeTempo };
@@ -1049,8 +986,8 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
       let updatedRegras = { ...prev.regrasTransitorias };
       let updatedTemposExercicio = { ...prev.temposExercicio };
 
-      if (dInicio && dFim && dFim.getTime() >= dInicio.getTime()) {
-        const diffDias = Math.floor((dFim.getTime() - dInicio.getTime()) / (24 * 3600 * 1000));
+      if (dInicio && dFim && Date.UTC(dFim.getFullYear(), dFim.getMonth(), dFim.getDate()) >= Date.UTC(dInicio.getFullYear(), dInicio.getMonth(), dInicio.getDate())) {
+        const diffDias = diffCalendarDays(dInicio, dFim);
         const anos = Math.floor(diffDias / 365);
         const rem = diffDias % 365;
         const meses = Math.floor(rem / 30);
@@ -1069,18 +1006,19 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
           }
         });
 
-        const date31Dez2021 = new Date(2021, 11, 31);
-        const diasAte31Dez2021 = dInicio <= date31Dez2021
-          ? Math.max(0, Math.floor((date31Dez2021.getTime() - dInicio.getTime()) / (24 * 3600 * 1000)))
-          : 0;
+        const marcosCoerentes = calcularMarcosCoerentes(
+          novaData,
+          prev.servidor.dataAdmissaoEstatutario,
+          updatedGrade.tempoTotalServicoContribuicao.totalDias
+        );
         updatedMarcos = {
           diasAteEmissao: diffDias,
-          diasAte31Dez2021,
-          diferencaDias: Math.max(0, diffDias - diasAte31Dez2021)
+          diasAte31Dez2021: marcosCoerentes.diasAte31Dez2021,
+          diferencaDias: marcosCoerentes.diferencaDias
         };
         updatedRegras = {
           ...updatedRegras,
-          tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
+          tempoEm31Dez2021Anos: marcosCoerentes.tempoEm31Dez2021Anos
         };
         updatedTemposExercicio = {
           servicoPublicoTotal: {
@@ -1135,11 +1073,11 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
         const dNasc = parseDateBR(value);
         const dRef = parseDateBR(prev.dataCertidao) || new Date();
         if (dNasc) {
-          updatedServidor.idadeHoje = Math.max(0, Math.floor((dRef.getTime() - dNasc.getTime()) / (365.25 * 24 * 3600 * 1000)));
+          updatedServidor.idadeHoje = calculateExactAge(dNasc, dRef);
           const date2021 = new Date(2021, 11, 31);
           updatedRegras = {
             ...updatedRegras,
-            idadeEm31Dez2021: Math.max(0, Math.floor((date2021.getTime() - dNasc.getTime()) / (365.25 * 24 * 3600 * 1000)))
+            idadeEm31Dez2021: calculateExactAge(dNasc, date2021)
           };
         }
       }
@@ -1157,8 +1095,8 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
       if (field === 'dataAdmissaoEstatutario') {
         const dInicio = parseDateBR(value);
         const dFim = parseDateBR(prev.dataCertidao);
-        if (dInicio && dFim && dFim.getTime() >= dInicio.getTime()) {
-          const diffDias = Math.floor((dFim.getTime() - dInicio.getTime()) / (24 * 3600 * 1000));
+        if (dInicio && dFim && Date.UTC(dFim.getFullYear(), dFim.getMonth(), dFim.getDate()) >= Date.UTC(dInicio.getFullYear(), dInicio.getMonth(), dInicio.getDate())) {
+          const diffDias = diffCalendarDays(dInicio, dFim);
           const anos = Math.floor(diffDias / 365);
           const rem = diffDias % 365;
           const meses = Math.floor(rem / 30);
@@ -1177,18 +1115,19 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
             }
           });
 
-          const date31Dez2021 = new Date(2021, 11, 31);
-          const diasAte31Dez2021 = dInicio <= date31Dez2021
-            ? Math.max(0, Math.floor((date31Dez2021.getTime() - dInicio.getTime()) / (24 * 3600 * 1000)))
-            : 0;
+          const marcosCoerentes = calcularMarcosCoerentes(
+            prev.dataCertidao,
+            value,
+            updatedGrade.tempoTotalServicoContribuicao.totalDias
+          );
           updatedMarcos = {
             diasAteEmissao: diffDias,
-            diasAte31Dez2021,
-            diferencaDias: Math.max(0, diffDias - diasAte31Dez2021)
+            diasAte31Dez2021: marcosCoerentes.diasAte31Dez2021,
+            diferencaDias: marcosCoerentes.diferencaDias
           };
           updatedRegras = {
             ...updatedRegras,
-            tempoEm31Dez2021Anos: Math.max(0, Math.floor(diasAte31Dez2021 / 365))
+            tempoEm31Dez2021Anos: marcosCoerentes.tempoEm31Dez2021Anos
           };
           updatedTemposExercicio = {
             servicoPublicoTotal: {
@@ -1222,7 +1161,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
     });
   };
 
-  // Atualizador com recálculo automático de subtotais e totais
+  // Atualizador com recálculo automático de subtotais, marcos e totais
   const updateGradeItem = (itemKey: keyof CertidaoData['gradeTempo'], subField: string, value: any) => {
     hasManualEditsRef.current = true;
     setCertidaoData(prev => {
@@ -1248,9 +1187,28 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
       };
 
       const finalGrade = recalcularGrade(tempGrade);
+      const marcosCoerentes = calcularMarcosCoerentes(
+        prev.dataCertidao,
+        prev.servidor.dataAdmissaoEstatutario,
+        finalGrade.tempoTotalServicoContribuicao.totalDias
+      );
+
+      const cargoEfetivoPeriodoDesc =
+        itemKey === 'tempoEstatutarioCMC' && subField === 'periodoDesc'
+          ? String(value || '')
+          : prev.temposExercicio.cargoEfetivoTotal.periodoDesc;
 
       return {
         ...prev,
+        marcos: {
+          diasAteEmissao: finalGrade.tempoEstatutarioCMC.totalDias,
+          diasAte31Dez2021: marcosCoerentes.diasAte31Dez2021,
+          diferencaDias: marcosCoerentes.diferencaDias
+        },
+        regrasTransitorias: {
+          ...prev.regrasTransitorias,
+          tempoEm31Dez2021Anos: marcosCoerentes.tempoEm31Dez2021Anos
+        },
         gradeTempo: finalGrade,
         temposExercicio: {
           servicoPublicoTotal: {
@@ -1259,7 +1217,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
           },
           cargoEfetivoTotal: {
             ...finalGrade.tempoEstatutarioCMC,
-            periodoDesc: prev.temposExercicio.cargoEfetivoTotal.periodoDesc
+            periodoDesc: cargoEfetivoPeriodoDesc
           }
         }
       };
@@ -1374,7 +1332,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
                     )}
                     {savedSimulations.map(sim => (
                       <option key={sim.id} value={sim.id}>
-                        📁 {sim.nome || 'Sem Nome'} (Matrícula: {sim.matricula || '---'}) — {sim.cargo || sim.selectedCareer?.replace(/_/g, ' ') || 'Servidor'}
+                        📁 {sim.nome || 'Sem Nome'} (Matrícula: {sim.matricula || '---'}) — {getCareerDisplayName(sim.cargo || sim.selectedCareer) || 'Servidor'}
                       </option>
                     ))}
                     <option value="blank">📝 Certidão em Branco (Edição Manual)</option>
@@ -1383,7 +1341,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
                 </div>
 
                 {/* Botão de Sincronização / Recarregar */}
-                {selectedSimId && selectedSimId !== 'blank' && selectedSimId !== 'exemplo_valdemir' && (
+                {!editingCertidao && selectedSimId && selectedSimId !== 'blank' && selectedSimId !== 'exemplo_valdemir' && (
                   <button
                     type="button"
                     onClick={() => {
@@ -1407,59 +1365,208 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
               </>
             )}
 
-            {/* Indicador do Número Atual da Certidão */}
-            <div
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-50 text-amber-900 text-xs font-bold border border-amber-200"
-              title="Número atual da certidão (para gerar o próximo número sequencial, use o botão Gerar Próximo na aba 1)"
-            >
-              <Hash size={13} className="text-amber-700" />
-              <span>Nº Atual: {certidaoData.numeroCertidao}</span>
+            {/* Campos Editáveis Independentes: Nº Aposentadoria, Nº Abono + Data */}
+            {editingCertidao ? (
+              <div className="flex flex-wrap items-center gap-1.5 bg-amber-50/90 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                <Hash size={13} className="text-amber-700 shrink-0" />
+                <label className="text-[11px] font-bold text-amber-900 whitespace-nowrap">
+                  {certidaoData.tipoCertidao === 'abono_permanencia' ? 'Nº Abono:' : 'Nº Aposentadoria:'}
+                </label>
+                <input
+                  type="text"
+                  value={certidaoData.numeroCertidao}
+                  onChange={(e) => {
+                    hasManualEditsRef.current = true;
+                    setCertidaoData(prev => ({
+                      ...prev,
+                      numeroCertidao: e.target.value,
+                      isSimulacao: e.target.value.trim().toUpperCase().startsWith('SIMULA')
+                    }));
+                  }}
+                  placeholder="Ex: 04/2026"
+                  className="w-24 bg-white border border-amber-300 rounded px-2 py-1 text-xs font-mono font-bold text-[#002f5a] focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  title="Edite livremente o número da certidão em edição"
+                />
+                <span className="text-amber-300">|</span>
+                <Calendar size={12} className="text-amber-700 shrink-0" />
+                <input
+                  type="text"
+                  value={certidaoData.dataCertidao}
+                  onChange={(e) => updateDataCertidao(e.target.value)}
+                  placeholder="DD/MM/AAAA"
+                  className="w-24 bg-white border border-amber-300 rounded px-2 py-1 text-xs font-mono font-semibold text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  title="Data de referência da certidão (DD/MM/AAAA)"
+                />
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2 bg-amber-50/90 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                {/* Nº Certidão Aposentadoria */}
+                <div className="flex items-center gap-1.5">
+                  <Hash size={12} className="text-[#004b8d] shrink-0" />
+                  <label className="text-[11px] font-bold text-[#002f5a] whitespace-nowrap">Nº Aposentadoria:</label>
+                  <input
+                    type="text"
+                    value={numeroAposentadoria}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      hasManualEditsRef.current = true;
+                      setNumeroAposentadoria(val);
+                      if ((certidaoData.tipoCertidao || 'aposentadoria') === 'aposentadoria') {
+                        setCertidaoData(prev => ({
+                          ...prev,
+                          numeroCertidao: val,
+                          isSimulacao: val.trim().toUpperCase().startsWith('SIMULA')
+                        }));
+                      }
+                    }}
+                    placeholder="Ex: 04/2026"
+                    className="w-20 bg-white border border-blue-300 rounded px-2 py-1 text-xs font-mono font-bold text-[#002f5a] focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    title="Número independente para Certidão Oficial de Aposentadoria"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => sugerirProximoNumero('aposentadoria')}
+                    className="px-2 py-1 bg-white hover:bg-blue-50 text-[#004b8d] border border-blue-200 rounded text-[11px] font-bold cursor-pointer transition-colors"
+                    title="Sugerir próximo número sequencial de Aposentadoria"
+                  >
+                    Sugerir
+                  </button>
+                </div>
+
+                <span className="text-amber-300 hidden sm:inline">|</span>
+
+                {/* Nº Certidão Abono */}
+                <div className="flex items-center gap-1.5">
+                  <Hash size={12} className="text-[#581c87] shrink-0" />
+                  <label className="text-[11px] font-bold text-[#581c87] whitespace-nowrap">Nº Abono:</label>
+                  <input
+                    type="text"
+                    value={numeroAbono}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      hasManualEditsRef.current = true;
+                      setNumeroAbono(val);
+                      if (certidaoData.tipoCertidao === 'abono_permanencia') {
+                        setCertidaoData(prev => ({
+                          ...prev,
+                          numeroCertidao: val,
+                          isSimulacao: val.trim().toUpperCase().startsWith('SIMULA')
+                        }));
+                      }
+                    }}
+                    placeholder="Ex: 01/2026"
+                    className="w-20 bg-white border border-purple-300 rounded px-2 py-1 text-xs font-mono font-bold text-[#581c87] focus:outline-none focus:ring-2 focus:ring-purple-400"
+                    title="Número independente para Certidão Oficial de Abono de Permanência"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => sugerirProximoNumero('abono_permanencia')}
+                    className="px-2 py-1 bg-white hover:bg-purple-50 text-[#581c87] border border-purple-200 rounded text-[11px] font-bold cursor-pointer transition-colors"
+                    title="Sugerir próximo número sequencial de Abono de Permanência"
+                  >
+                    Sugerir
+                  </button>
+                </div>
+
+                <span className="text-amber-300 hidden sm:inline">|</span>
+
+                {/* Data de Referência */}
+                <div className="flex items-center gap-1.5">
+                  <Calendar size={12} className="text-amber-700 shrink-0" />
+                  <input
+                    type="text"
+                    value={certidaoData.dataCertidao}
+                    onChange={(e) => updateDataCertidao(e.target.value)}
+                    placeholder="DD/MM/AAAA"
+                    className="w-24 bg-white border border-amber-300 rounded px-2 py-1 text-xs font-mono font-semibold text-gray-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    title="Data de referência da certidão (DD/MM/AAAA)"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Lado Direito: Botões de Emissão ou Ações de Edição Posterior */}
+          {editingCertidao ? (
+            <div className="flex flex-wrap items-center gap-2 self-end lg:self-auto">
+              <button
+                type="button"
+                onClick={handleCancelarEdicaoCertidao}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold transition-all cursor-pointer"
+              >
+                <X size={14} /> Cancelar Edição
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSalvarEdicaoCertidao(false)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#004b8d] hover:bg-[#003768] text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+              >
+                <Save size={14} /> Salvar Alterações
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSalvarEdicaoCertidao(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+              >
+                <Download size={14} /> Salvar & Baixar PDF
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2.5 self-end lg:self-auto">
+              {/* Certidão de Simulação (Aposentadoria) */}
+              <button
+                type="button"
+                onClick={handleEmitirSimulacao}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
+                title="Gerar Minuta de Aposentadoria (Sem número)"
+              >
+                <FileCheck size={14} /> Minuta Aposentadoria
+              </button>
+
+              {/* Certidão Oficial Aposentadoria */}
+              <button
+                type="button"
+                onClick={handleEmitirPadrao}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#004b8d] hover:bg-[#003768] text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
+                title="Emitir Certidão Oficial de Aposentadoria (Com número)"
+              >
+                <Download size={14} /> Oficial Aposentadoria
+              </button>
+
+              {/* Certidão Abono de Permanência (Simulação) */}
+              <button
+                type="button"
+                onClick={handleEmitirAbonoSimulacao}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
+                title="Gerar Minuta de Abono de Permanência (Sem número)"
+              >
+                <FileCheck size={14} /> Minuta Abono
+              </button>
+
+              {/* Certidão Oficial Abono de Permanência */}
+              <button
+                type="button"
+                onClick={handleEmitirAbonoOficial}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#581c87] hover:bg-[#4c1d95] text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
+                title="Emitir Certidão Oficial de Abono de Permanência com Numeração"
+              >
+                <Award size={14} /> Oficial Abono de Permanência
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Banner de Modo de Edição Posterior de Certidão Já Emitida */}
+        {editingCertidao && (
+          <div className="bg-amber-50 border border-amber-300 rounded-lg px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-950">
+            <div className="flex items-center gap-2">
+              <Pencil size={15} className="text-amber-700 shrink-0" />
+              <span>
+                <strong>Editando certidão emitida ({editingCertidao.numeroCertidao}):</strong> ajuste livremente qualquer campo nas abas abaixo (incluindo o número). Ao salvar, o registro original será atualizado <strong>sem alterar a contagem sequencial</strong>.
+              </span>
             </div>
           </div>
-
-          {/* Lado Direito: Botões de Emissão */}
-          <div className="flex flex-wrap items-center gap-2.5 self-end lg:self-auto">
-            {/* Certidão de Simulação (Aposentadoria) */}
-            <button
-              type="button"
-              onClick={handleEmitirSimulacao}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
-              title="Gerar Minuta de Aposentadoria (Sem número)"
-            >
-              <FileCheck size={14} /> Minuta Aposentadoria
-            </button>
-
-            {/* Certidão Oficial Aposentadoria */}
-            <button
-              type="button"
-              onClick={handleEmitirPadrao}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#004b8d] hover:bg-[#003768] text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
-              title="Emitir Certidão Oficial de Aposentadoria (Com número)"
-            >
-              <Download size={14} /> Oficial Aposentadoria
-            </button>
-
-            {/* Certidão Abono de Permanência (Simulação) */}
-            <button
-              type="button"
-              onClick={handleEmitirAbonoSimulacao}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
-              title="Gerar Minuta de Abono de Permanência (Sem número)"
-            >
-              <FileCheck size={14} /> Minuta Abono
-            </button>
-
-            {/* Certidão Oficial Abono de Permanência */}
-            <button
-              type="button"
-              onClick={handleEmitirAbonoOficial}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#581c87] hover:bg-[#4c1d95] text-white text-xs font-bold transition-all shadow-xs cursor-pointer group"
-              title="Emitir Certidão Oficial de Abono de Permanência com Numeração"
-            >
-              <Award size={14} /> Oficial Abono de Permanência
-            </button>
-          </div>
-        </div>
+        )}
 
         {/* Status resumido da certidão (sem repetir dados já exibidos no cabeçalho do dossiê) */}
         <div className="flex flex-wrap items-center justify-between text-xs pt-2.5 border-t border-gray-150 gap-2">
@@ -1982,23 +2089,40 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">Número da Certidão</label>
+              <label className="block text-xs font-bold text-gray-700 mb-1">
+                {certidaoData.tipoCertidao === 'abono_permanencia'
+                  ? 'Número da Certidão (Abono de Permanência)'
+                  : 'Número da Certidão (Aposentadoria)'}
+              </label>
               <div className="flex gap-1.5">
                 <input
                   type="text"
                   value={certidaoData.numeroCertidao}
-                  onChange={(e) => { hasManualEditsRef.current = true; setCertidaoData({ ...certidaoData, numeroCertidao: e.target.value }); }}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    hasManualEditsRef.current = true;
+                    if (!editingCertidao) {
+                      if (certidaoData.tipoCertidao === 'abono_permanencia') {
+                        setNumeroAbono(val);
+                      } else {
+                        setNumeroAposentadoria(val);
+                      }
+                    }
+                    setCertidaoData({ ...certidaoData, numeroCertidao: val });
+                  }}
                   className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono font-bold text-gray-800"
-                  placeholder="Ex: 04/2026"
+                  placeholder={certidaoData.tipoCertidao === 'abono_permanencia' ? 'Ex: 01/2026' : 'Ex: 04/2026'}
                 />
-                <button
-                  type="button"
-                  onClick={gerarProximoNumero}
-                  className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-[#004b8d] border border-blue-200 rounded-lg text-xs font-bold whitespace-nowrap cursor-pointer transition-colors shadow-2xs"
-                  title="Gerar próximo número sequencial oficial"
-                >
-                  Gerar Próximo
-                </button>
+                {!editingCertidao && (
+                  <button
+                    type="button"
+                    onClick={() => sugerirProximoNumero(certidaoData.tipoCertidao === 'abono_permanencia' ? 'abono_permanencia' : 'aposentadoria')}
+                    className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-[#004b8d] border border-blue-200 rounded-lg text-xs font-bold whitespace-nowrap cursor-pointer transition-colors shadow-2xs"
+                    title="Preencher com o próximo número sequencial oficial deste tipo de certidão"
+                  >
+                    Sugerir Próximo
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2006,7 +2130,19 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
               <label className="block text-xs font-bold text-gray-700 mb-1">Finalidade da Certidão</label>
               <select
                 value={certidaoData.tipoCertidao || 'aposentadoria'}
-                onChange={(e) => { hasManualEditsRef.current = true; setCertidaoData({ ...certidaoData, tipoCertidao: e.target.value as any }); }}
+                onChange={(e) => {
+                  const novoTipo = e.target.value as TipoCertidaoSequencial;
+                  hasManualEditsRef.current = true;
+                  setCertidaoData(prev => ({
+                    ...prev,
+                    tipoCertidao: novoTipo,
+                    numeroCertidao: editingCertidao
+                      ? prev.numeroCertidao
+                      : novoTipo === 'abono_permanencia'
+                        ? numeroAbono
+                        : numeroAposentadoria
+                  }));
+                }}
                 className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 font-bold bg-white text-gray-800"
               >
                 <option value="aposentadoria">Certidão de Aposentadoria</option>
@@ -3112,6 +3248,15 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
+                              onClick={() => handleIniciarEdicaoCertidao(item)}
+                              className="p-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Editar esta certidão sem alterar a contagem sequencial"
+                            >
+                              <Pencil size={13} /> Editar
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => {
                                 try {
                                   gerarCertidaoAposentadoriaPadraoPDF(item.snapshot);
@@ -3178,6 +3323,7 @@ export default function GeradorCertidao({ externalSim, onSyncSim, embedded = fal
                       excluirCertidaoEmitida(deleteHistTarget.id);
                       setDeleteHistTarget(null);
                       carregarHistorico();
+                      onHistoricoChanged?.();
                       triggerFeedback('Registro de certidão removido com sucesso.');
                     }}
                     className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer"

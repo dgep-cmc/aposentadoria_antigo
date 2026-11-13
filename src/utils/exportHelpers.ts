@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { UnifiedSimulation } from './simulationsStore';
 import { CMC_LOGO_BASE64, CMC_LOGO_ASPECT_RATIO } from './cmcLogo';
+import { getCareerDisplayName } from '../data/careers';
 
 // Common currency formatter helper
 const formatCurrency = (val: number | undefined): string => {
@@ -152,7 +153,7 @@ export function exportToPDF(
   // Box 0: Server Identity Block
   const serverDetailsGrid = [
     ['Servidor:', sim.nome || 'NÃO IDENTIFICADO', 'Matrícula:', sim.matricula || 'N/A'],
-    ['Cargo Atual:', (sim.cargo || sim.selectedCareer || '').replace(/_/g, ' ') + ' / ' + (sim.selectedLevel || ''), 'Gênero/Sexo:', sim.sexo || 'N/A'],
+    ['Cargo Atual:', (getCareerDisplayName(sim.cargo || sim.selectedCareer) || 'N/A') + ' / ' + (sim.selectedLevel || ''), 'Gênero/Sexo:', sim.sexo || 'N/A'],
     ['Data Nasc.:', formatDate(sim.dataNascimento), 'Admissão CMC:', formatDate(sim.ingressoCmc), ],
     ['Tempo Município:', formatarTempoCompleto(Math.floor(totalDiasSPConsolidado)), 'Averbado (INSS):', formatarTempoCompleto(calculatedDiasINSS)],
     ['Deduções/Afastam.:', formatarTempoCompleto(sim.diasAfastamento || 0), 'Total Consolidado:', formatarTempoCompleto(Math.floor(totalDiasContribConsolidado))]
@@ -697,29 +698,76 @@ export function exportToPDF(
     (doc as any).lastAutoTable.finalY = currentY;
   }
 
-  // Footer / Authority Sign-offs
-  const finalY = (doc as any).lastAutoTable.finalY + 15;
-  const targetY = finalY > 270 ? 20 : finalY;
-  
-  if (finalY > 270) {
+  // Assinatura / Encerramento Institucional Padronizado
+  let finalY = ((doc as any).lastAutoTable?.finalY || 200) + 14;
+  if (finalY > 240) {
     doc.addPage();
+    finalY = 24;
   }
-  
+
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(15, finalY, 180, 17, 1.2, 1.2, 'FD');
+
+  doc.setFont('Helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(0, 47, 90);
+  doc.text('OBSERVAÇÕES E VALIDAÇÃO TÉCNICA DA SIMULAÇÃO', 18, finalY + 4.8);
+
+  doc.setFont('Helvetica', 'normal');
+  doc.setFontSize(7.2);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Este dossiê constitui simulação computacional baseada estritamente nos dados históricos informados no cadastro.', 18, finalY + 9.2);
+  doc.text('Os valores são indicativos para planejamento previdenciário e sujeitos à conferência formal pelo setor competente e IPMC.', 18, finalY + 13.4);
+
+  let signY = finalY + 24;
+  if (signY > 258) {
+    doc.addPage();
+    signY = 26;
+  }
+
+  doc.setFont('Helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Curitiba, ${new Date().toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })}`, 15, signY);
+
+  signY += 14;
+  const centerX = 105;
+  doc.setDrawColor(100, 116, 139);
+  doc.setLineWidth(0.35);
+  doc.line(centerX - 48, signY, centerX + 48, signY);
+  signY += 4.2;
+
+  doc.setFont('Helvetica', 'bold');
+  doc.setFontSize(7.8);
+  doc.setTextColor(71, 85, 105);
+  doc.text('Responsável Técnico pela Simulação:', centerX, signY, { align: 'center' });
+  signY += 4.0;
+  doc.setFontSize(8.8);
+  doc.setTextColor(0, 47, 90);
+  doc.text('Setor de Gestão de Processos e Benefícios Funcionais', centerX, signY, { align: 'center' });
+  signY += 3.6;
   doc.setFont('Helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Relatório de simulação emitido em: ${new Date().toLocaleString('pt-BR')}`, 15, targetY);
-  doc.text('Aviso Importante: Este dossiê constitui simulação computacional baseada estritamente nos dados históricos informados.', 15, targetY + 4);
-  doc.text('Os valores são indicativos e preliminares para planejamento previdenciário e não se convertem em direito líquido e certo.', 15, targetY + 8);
+  doc.setTextColor(51, 65, 85);
+  doc.text('Diretoria de Gestão de Pessoas — Câmara Municipal de Curitiba', centerX, signY, { align: 'center' });
 
-  // Apply sequential page numbering
+  // Apply sequential page numbering & standardized footer line
   const pageCount = doc.getNumberOfPages();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const pageWidth = doc.internal.pageSize.getWidth();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
+    doc.setDrawColor(215, 222, 232);
+    doc.setLineWidth(0.25);
+    doc.line(15, pageHeight - 10.5, pageWidth - 15, pageHeight - 10.5);
     doc.setFont('Helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(148, 163, 184);
-    doc.text(`Página ${i} de ${pageCount}`, 105, 290, { align: 'center' });
+    doc.setFontSize(7.0);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Câmara Municipal de Curitiba • DGEP • Dossiê Analítico de Simulação Previdenciária', 15, pageHeight - 6.2);
+    doc.setFont('Helvetica', 'bold');
+    doc.setTextColor(71, 85, 105);
+    doc.text(`Página ${i} de ${pageCount}`, pageWidth - 15, pageHeight - 6.2, { align: 'right' });
   }
 
   // Save the PDF
@@ -774,7 +822,7 @@ export function exportToExcel(
   addRow(['Campo', 'Valor Detalhado']);
   addRow(['Nome Completo', sim.nome || 'NÃO IDENTIFICADO']);
   addRow(['Matrícula Funcional', sim.matricula || 'N/A']);
-  addRow(['Cargo Atuante', (sim.cargo || sim.selectedCareer || '').replace(/_/g, ' ')]);
+  addRow(['Cargo Atuante', getCareerDisplayName(sim.cargo || sim.selectedCareer)]);
   addRow(['Nível / Referência', sim.selectedLevel || 'N/A']);
   addRow(['Gênero / Sexo Biológico', sim.sexo || 'N/A']);
   addRow(['Data de Nascimento', formatDate(sim.dataNascimento)]);

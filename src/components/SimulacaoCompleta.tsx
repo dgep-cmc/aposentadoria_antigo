@@ -26,7 +26,8 @@ import {
   Award,
   History,
   FileCheck,
-  Download
+  Download,
+  Pencil
 } from 'lucide-react';
 import { 
   UnifiedSimulation, 
@@ -37,19 +38,21 @@ import {
 } from '../utils/simulationsStore';
 import { getSavedCareerData, getSavedFatoresINSS, getSavedFGValues, getSavedSalaryCaps, getPatternForCareer } from '../utils/settingsStore';
 import { exportToPDF, exportToExcel } from '../utils/exportHelpers';
-import { romanNumerals, stimulusPercentages, ATS_PERCENTAGES, SALARY_CAP_GENERAL, SALARY_CAP_PROCURADOR } from '../data/careers';
+import { romanNumerals, stimulusPercentages, ATS_PERCENTAGES, SALARY_CAP_GENERAL, SALARY_CAP_PROCURADOR, getCareerDisplayName } from '../data/careers';
 import { 
   emitirCertidaoSimulacao, 
   emitirCertidaoOficial, 
   emitirCertidaoAbonoSimulacao,
   emitirCertidaoAbonoOficial,
-  construirCertidaoAPartirDeSimulacao 
+  construirCertidaoAPartirDeSimulacao,
+  extrairPeriodosDeCompetencias
 } from '../utils/certidaoBuilder';
 import { 
   CertidaoEmitida, 
   getCertidoesEmitidas, 
   getProximoNumeroOficial, 
-  excluirCertidaoEmitida 
+  excluirCertidaoEmitida,
+  atualizarCertidaoEmitida
 } from '../utils/certidoesEmitidasStore';
 import { gerarCertidaoAposentadoriaPadraoPDF } from '../utils/exportCertidaoPDF';
 
@@ -494,11 +497,11 @@ export function StepCarreira({ sim, updateSim }: { sim: UnifiedSimulation, updat
               updateSim('selectedCareer', nextCareer);
               updateSim('padrao', getPatternForCareer(nextCareer));
             }}
-            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all capitalize"
+            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#004b8d] transition-all"
           >
             <option value="">Selecione a Carreira...</option>
             {careerOptions.map(c => (
-              <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>
+              <option key={c} value={c}>{getCareerDisplayName(c)}</option>
             ))}
           </select>
         </div>
@@ -913,6 +916,7 @@ export function StepTempos({ sim, updateSim, hideAfastamentos = false }: { sim: 
     // Expand the first card initially to provide immediate feedback
     return { 0: true };
   });
+  const [quickRanges, setQuickRanges] = useState<Record<number, { start: string; end: string }>>({});
 
   const addIncorporacao = () => {
     const nextIdx = sim.incorporacoes.length;
@@ -963,11 +967,18 @@ export function StepTempos({ sim, updateSim, hideAfastamentos = false }: { sim: 
     const newInc = [...sim.incorporacoes];
     
     if (field === 'useDates') {
-      newInc[index] = { ...newInc[index], useDates: value };
+      const updatedItem = { ...newInc[index], useDates: value };
       if (value) {
-        if (!newInc[index].dataInicio) newInc[index].dataInicio = '';
-        if (!newInc[index].dataFim) newInc[index].dataFim = '';
+        if (!updatedItem.dataInicio) updatedItem.dataInicio = '';
+        if (!updatedItem.dataFim) updatedItem.dataFim = '';
+      } else if (!updatedItem.periodoDescricao && updatedItem.dataInicio && updatedItem.dataFim) {
+        const fmtBr = (iso: string) => {
+          const p = iso.split('-');
+          return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : iso;
+        };
+        updatedItem.periodoDescricao = `${fmtBr(updatedItem.dataInicio)} a ${fmtBr(updatedItem.dataFim)}`;
       }
+      newInc[index] = updatedItem;
     } else {
       newInc[index] = { ...newInc[index], [field]: value };
     }
@@ -1227,7 +1238,14 @@ export function StepTempos({ sim, updateSim, hideAfastamentos = false }: { sim: 
                             <span className="text-gray-400 font-mono font-bold">({computedDays}d)</span>
                           </span>
                         ) : (
-                          `${row.years || 0}a ${row.months || 0}m ${row.days || 0}d`
+                          <span className="inline-flex items-center gap-1.5">
+                            {(row.periodoDescricao?.trim() || extrairPeriodosDeCompetencias(lineStr)) && (
+                              <span className="text-[11px] text-gray-500 font-sans font-medium">
+                                {row.periodoDescricao?.trim() || extrairPeriodosDeCompetencias(lineStr)} •
+                              </span>
+                            )}
+                            <span>{`${row.years || 0}a ${row.months || 0}m ${row.days || 0}d`}</span>
+                          </span>
                         )}
                       </span>
 
@@ -1329,41 +1347,103 @@ export function StepTempos({ sim, updateSim, hideAfastamentos = false }: { sim: 
                           </div>
                         </div>
                       ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                          <div className="md:col-span-6 flex flex-col gap-1">
-                            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Anos</label>
-                            <input 
-                              type="number"
-                              min={0}
-                              placeholder="0"
-                              value={row.years === 0 ? '' : row.years}
-                              onChange={(e) => updateIncorporacao(idx, 'years', parseInt(e.target.value) || 0)}
-                              className="w-full p-2 bg-white border border-[#dee2e6] rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-[#004b8d]"
-                            />
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                            <div className="md:col-span-4 flex flex-col gap-1">
+                              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Anos</label>
+                              <input 
+                                type="number"
+                                min={0}
+                                placeholder="0"
+                                value={row.years === 0 ? '' : row.years}
+                                onChange={(e) => updateIncorporacao(idx, 'years', parseInt(e.target.value) || 0)}
+                                className="w-full p-2 bg-white border border-[#dee2e6] rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-[#004b8d]"
+                              />
+                            </div>
+
+                            <div className="md:col-span-4 flex flex-col gap-1">
+                              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Meses</label>
+                              <input 
+                                type="number"
+                                min={0}
+                                max={11}
+                                placeholder="0"
+                                value={row.months === 0 ? '' : row.months}
+                                onChange={(e) => updateIncorporacao(idx, 'months', parseInt(e.target.value) || 0)}
+                                className="w-full p-2 bg-white border border-[#dee2e6] rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-[#004b8d]"
+                              />
+                            </div>
+
+                            <div className="md:col-span-4 flex flex-col gap-1">
+                              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Dias</label>
+                              <input 
+                                type="number"
+                                min={0}
+                                placeholder="0"
+                                value={row.days === 0 ? '' : row.days}
+                                onChange={(e) => updateIncorporacao(idx, 'days', parseInt(e.target.value) || 0)}
+                                className="w-full p-2 bg-white border border-[#dee2e6] rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-[#004b8d]"
+                              />
+                            </div>
                           </div>
 
-                          <div className="md:col-span-3 flex flex-col gap-1">
-                            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Meses</label>
-                            <input 
-                              type="number"
-                              min={0}
-                              max={11}
-                              placeholder="0"
-                              value={row.months === 0 ? '' : row.months}
-                              onChange={(e) => updateIncorporacao(idx, 'months', parseInt(e.target.value) || 0)}
-                              className="w-full p-2 bg-white border border-[#dee2e6] rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-[#004b8d]"
-                            />
-                          </div>
-
-                          <div className="md:col-span-3 flex flex-col gap-1">
-                            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Dias</label>
-                            <input 
-                              type="number"
-                              min={0}
-                              placeholder="0"
-                              value={row.days === 0 ? '' : row.days}
-                              onChange={(e) => updateIncorporacao(idx, 'days', parseInt(e.target.value) || 0)}
-                              className="w-full p-2 bg-white border border-[#dee2e6] rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-[#004b8d]"
+                          <div className="bg-blue-50/50 border border-blue-100 rounded-lg p-3 space-y-2">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <label className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wider">
+                                Período(s) Referente(s) à Contagem de Tempo e Dias (para a Certidão)
+                              </label>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <input
+                                  type="date"
+                                  value={quickRanges[idx]?.start || ''}
+                                  onChange={(e) =>
+                                    setQuickRanges(prev => ({
+                                      ...prev,
+                                      [idx]: { start: e.target.value, end: prev[idx]?.end || '' }
+                                    }))
+                                  }
+                                  className="p-1 bg-white border border-blue-200 rounded text-[11px] focus:outline-none focus:ring-1 focus:ring-[#004b8d]"
+                                  title="Data inicial do vínculo para adicionar à descrição"
+                                />
+                                <span className="text-[11px] text-gray-500">a</span>
+                                <input
+                                  type="date"
+                                  value={quickRanges[idx]?.end || ''}
+                                  onChange={(e) =>
+                                    setQuickRanges(prev => ({
+                                      ...prev,
+                                      [idx]: { start: prev[idx]?.start || '', end: e.target.value }
+                                    }))
+                                  }
+                                  className="p-1 bg-white border border-blue-200 rounded text-[11px] focus:outline-none focus:ring-1 focus:ring-[#004b8d]"
+                                  title="Data final do vínculo para adicionar à descrição"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const s = quickRanges[idx]?.start;
+                                    const f = quickRanges[idx]?.end;
+                                    if (!s || !f) return;
+                                    const toBr = (iso: string) => iso.split('-').reverse().join('/');
+                                    const novoTrecho = `${toBr(s)} a ${toBr(f)}`;
+                                    const atual = (row.periodoDescricao || '').trim();
+                                    const atualizado = atual ? `${atual}; ${novoTrecho}` : novoTrecho;
+                                    updateIncorporacao(idx, 'periodoDescricao', atualizado);
+                                    setQuickRanges(prev => ({ ...prev, [idx]: { start: '', end: '' } }));
+                                  }}
+                                  disabled={!quickRanges[idx]?.start || !quickRanges[idx]?.end}
+                                  className="px-2.5 py-1 bg-[#004b8d] hover:bg-[#003a6d] disabled:opacity-40 text-white rounded text-[10px] font-bold cursor-pointer transition-colors"
+                                >
+                                  + Incluir Período
+                                </button>
+                              </div>
+                            </div>
+                            <input
+                              type="text"
+                              value={row.periodoDescricao || ''}
+                              onChange={(e) => updateIncorporacao(idx, 'periodoDescricao', e.target.value)}
+                              placeholder="Ex: 01/03/1982 a 20/03/1983; 01/07/1983 a 17/07/1984; 11/04/1988 a 27/06/1988"
+                              className="w-full p-2 bg-white border border-blue-200 rounded-md text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[#004b8d]"
                             />
                           </div>
                         </div>
@@ -1491,6 +1571,14 @@ export function StepTempos({ sim, updateSim, hideAfastamentos = false }: { sim: 
                                   <span className="text-gray-500">Linhas Lidas:</span>
                                   <span className="font-bold text-gray-800">{linesVal.length}</span>
                                 </div>
+                                {extrairPeriodosDeCompetencias(lineStr) && (
+                                  <div className="flex justify-between gap-2 border-b border-gray-200/50 pb-1">
+                                    <span className="text-gray-500 shrink-0">Período(s):</span>
+                                    <span className="font-mono font-bold text-[#004b8d] text-right">
+                                      {extrairPeriodosDeCompetencias(lineStr)}
+                                    </span>
+                                  </div>
+                                )}
                                 <div className="flex justify-between border-b border-gray-200/50 pb-1">
                                   <span className="text-gray-500">Soma Original:</span>
                                   <span className="font-mono font-bold text-gray-800">R$ {originalSum.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
@@ -1737,6 +1825,21 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
   const [showHistoricoModal, setShowHistoricoModal] = useState(false);
   const [historicoCertidoes, setHistoricoCertidoes] = useState<CertidaoEmitida[]>([]);
   const [confirmDeleteCertId, setConfirmDeleteCertId] = useState<string | null>(null);
+  const [editingHistCert, setEditingHistCert] = useState<CertidaoEmitida | null>(null);
+  const [editCertForm, setEditCertForm] = useState({
+    numeroCertidao: '',
+    dataCertidao: '',
+    cargo: '',
+    padrao: '',
+    referencia: '',
+    atsPercentual: 0,
+    recebeAbono: false,
+    dataAbono: '',
+    registroTribunalContas: '',
+    lavraturaNome: '',
+    lavraturaMatricula: '',
+    lavraturaSetor: ''
+  });
 
   const carregarHistorico = () => {
     setHistoricoCertidoes(getCertidoesEmitidas());
@@ -1751,9 +1854,82 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
     setTimeout(() => setNotification(''), 3500);
   };
 
+  const handleAbrirEdicaoHistCert = (doc: CertidaoEmitida) => {
+    setEditingHistCert(doc);
+    setEditCertForm({
+      numeroCertidao: doc.snapshot?.numeroCertidao || doc.numeroCertidao || '',
+      dataCertidao: doc.snapshot?.dataCertidao || doc.dataCertidao || '',
+      cargo: doc.snapshot?.servidor?.cargo || doc.cargo || '',
+      padrao: doc.snapshot?.servidor?.padrao || '',
+      referencia: doc.snapshot?.servidor?.referencia || '',
+      atsPercentual: doc.snapshot?.regrasTransitorias?.atsPercentual ?? 0,
+      recebeAbono: Boolean(doc.snapshot?.regrasTransitorias?.recebeAbono),
+      dataAbono: doc.snapshot?.regrasTransitorias?.dataAbono || '',
+      registroTribunalContas: doc.snapshot?.servidor?.registroTribunalContas || '',
+      lavraturaNome: doc.snapshot?.lavratura?.servidorNome || '',
+      lavraturaMatricula: doc.snapshot?.lavratura?.servidorMatricula || '',
+      lavraturaSetor: doc.snapshot?.lavratura?.setor || ''
+    });
+  };
+
+  const handleSalvarEdicaoHistCert = (baixarPdf = false) => {
+    if (!editingHistCert) return;
+    const updatedSnapshot = {
+      ...editingHistCert.snapshot,
+      numeroCertidao: editCertForm.numeroCertidao.trim() || editingHistCert.numeroCertidao,
+      dataCertidao: editCertForm.dataCertidao.trim() || editingHistCert.dataCertidao,
+      servidor: {
+        ...editingHistCert.snapshot.servidor,
+        cargo: editCertForm.cargo.trim() || editingHistCert.snapshot.servidor.cargo,
+        padrao: editCertForm.padrao.trim(),
+        referencia: editCertForm.referencia.trim(),
+        registroTribunalContas: editCertForm.registroTribunalContas.trim()
+      },
+      regrasTransitorias: {
+        ...editingHistCert.snapshot.regrasTransitorias,
+        atsPercentual: Number(editCertForm.atsPercentual) || 0,
+        recebeAbono: editCertForm.recebeAbono,
+        dataAbono: editCertForm.recebeAbono ? editCertForm.dataAbono.trim() : ''
+      },
+      lavratura: {
+        ...editingHistCert.snapshot.lavratura,
+        servidorNome: editCertForm.lavraturaNome.trim(),
+        servidorMatricula: editCertForm.lavraturaMatricula.trim(),
+        setor: editCertForm.lavraturaSetor.trim()
+      }
+    };
+
+    const grade = updatedSnapshot.gradeTempo.tempoTotalServicoContribuicao;
+    const updatedItem: CertidaoEmitida = {
+      ...editingHistCert,
+      numeroCertidao: updatedSnapshot.numeroCertidao,
+      dataCertidao: updatedSnapshot.dataCertidao,
+      cargo:
+        updatedSnapshot.tipoCertidao === 'abono_permanencia'
+          ? `${updatedSnapshot.servidor.cargo} (Abono de Permanência)`
+          : updatedSnapshot.servidor.cargo,
+      tempoTotalDias: grade.totalDias,
+      tempoFormatado: `${grade.anos} anos, ${grade.meses} meses e ${grade.dias} dias`,
+      snapshot: updatedSnapshot
+    };
+
+    atualizarCertidaoEmitida(updatedItem);
+    carregarHistorico();
+    setEditingHistCert(null);
+    if (baixarPdf) {
+      try {
+        gerarCertidaoAposentadoriaPadraoPDF(updatedSnapshot);
+      } catch (e) {
+        showNotification('Alterações salvas, mas houve erro ao gerar PDF.');
+        return;
+      }
+    }
+    showNotification(`Certidão (${updatedItem.numeroCertidao}) atualizada sem alterar a contagem sequencial!`);
+  };
+
   const handleGerarCertidaoSimulacao = () => {
     try {
-      emitirCertidaoSimulacao(sim);
+      emitirCertidaoSimulacao(simFiltrado);
       carregarHistorico();
       showNotification('Certidão de Simulação (Minuta em PDF) gerada com sucesso e arquivada!');
     } catch (e) {
@@ -1774,12 +1950,12 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
   };
 
   const handleAbrirModalOficial = () => {
-    setNumeroOficialInput(getProximoNumeroOficial());
+    setNumeroOficialInput(getProximoNumeroOficial('aposentadoria'));
     setShowModalCertidaoOficial(true);
   };
 
   const handleAbrirModalAbonoOficial = () => {
-    setNumeroOficialInput(getProximoNumeroOficial());
+    setNumeroOficialInput(getProximoNumeroOficial('abono_permanencia'));
     setShowModalAbonoOficial(true);
   };
 
@@ -2969,6 +3145,23 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
     return sim;
   }, [sim, temSimulado, cenarioAtivo]);
 
+  const resumoCertidaoAtual = React.useMemo(() => {
+    return construirCertidaoAPartirDeSimulacao(simFiltrado, {
+      tipo: temSimulado && cenarioAtivo === 'sem_simulado' ? 'oficial' : 'simulacao'
+    });
+  }, [simFiltrado, temSimulado, cenarioAtivo]);
+
+  const certCmcDias = resumoCertidaoAtual.gradeTempo.tempoEstatutarioCMC.totalDias;
+  const certDeducoesDias =
+    (resumoCertidaoAtual.gradeTempo.afastamentosSemVencimento.totalDias || 0) +
+    (resumoCertidaoAtual.gradeTempo.penalidadesAdministrativas.totalDias || 0);
+  const certAverbadosPublicosDias = Math.max(
+    0,
+    resumoCertidaoAtual.gradeTempo.tempoTotalServicoPublico.totalDias - certCmcDias + certDeducoesDias
+  );
+  const certAverbadosInssDias = resumoCertidaoAtual.gradeTempo.tempoINSSPrivada.totalDias || 0;
+  const certTotalContribDias = resumoCertidaoAtual.gradeTempo.tempoTotalServicoContribuicao.totalDias;
+
   if (showReport) {
     return (
       <div className="space-y-6">
@@ -3024,7 +3217,7 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm font-mono border-b border-gray-300 pb-4">
             <div className="break-words"><span className="font-bold text-gray-500 block text-[10px] uppercase">Nome do Servidor</span>{sim.nome || 'NÃO IDENTIFICADO'}</div>
             <div className="break-words"><span className="font-bold text-gray-500 block text-[10px] uppercase">Matrícula</span>{sim.matricula || 'N/A'}</div>
-            <div className="break-words"><span className="font-bold text-gray-500 block text-[10px] uppercase">Cargo Atual</span>{(sim.cargo || sim.selectedCareer).replace(/_/g, ' ')} / {sim.selectedLevel}</div>
+            <div className="break-words"><span className="font-bold text-gray-500 block text-[10px] uppercase">Cargo Atual</span>{getCareerDisplayName(sim.cargo || sim.selectedCareer)} / {sim.selectedLevel}</div>
             <div className="break-words"><span className="font-bold text-gray-500 block text-[10px] uppercase">Nasc. / Sexo</span>{sim.dataNascimento ? new Date(sim.dataNascimento + 'T00:00:00').toLocaleDateString('pt-BR') : 'N/A'} - {sim.sexo || 'N/A'}</div>
           </div>
 
@@ -3038,35 +3231,35 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
               <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1">
                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block">Tempo Atual na Câmara (CMC)</span>
                 <strong className="text-sm text-slate-900 block font-mono font-bold">
-                  {formatarTempo(Math.max(0, tempoAtualCmcDias))}
+                  {formatarTempo(certCmcDias)}
                 </strong>
-                <span className="text-[11px] text-gray-500 block">Tempo acumulado em exercício na CMC apurado até a data atual ({new Date().toLocaleDateString('pt-BR')}).</span>
+                <span className="text-[11px] text-gray-500 block">Tempo acumulado em exercício estatutário na CMC até hoje ({resumoCertidaoAtual.dataCertidao}).</span>
               </div>
               <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1">
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block">Tempo Público Averbado (SP)</span>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block">Tempo Público / Fícto / CLT</span>
                 <strong className="text-sm text-slate-900 block font-mono font-bold">
-                  {formatarTempo(calculatedDiasSP)}
+                  {formatarTempo(certAverbadosPublicosDias)}
                 </strong>
-                <span className="text-[11px] text-gray-500 block">Tempo averbado de outros cargos, empregos ou funções em órgãos da Administração Pública (RPPS).</span>
+                <span className="text-[11px] text-gray-500 block">Averbações públicas (SP/CLT anterior), recibado e licenças-prêmio incorporadas.</span>
               </div>
               <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1">
                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wide block">Tempo Privado Averbado (INSS)</span>
-                <strong className="text-sm text-slate-900 block font-mono font-bold">{formatarTempo(calculatedDiasINSS)}</strong>
+                <strong className="text-sm text-slate-900 block font-mono font-bold">{formatarTempo(certAverbadosInssDias)}</strong>
                 <span className="text-[11px] text-gray-500 block">Tempo total averbado de iniciativa privada junto ao Regime Geral de Previdência Social (RGPS).</span>
               </div>
-              {sim.diasAfastamento && sim.diasAfastamento > 0 ? (
+              {certDeducoesDias > 0 ? (
                 <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1">
                   <span className="text-[10px] font-bold text-gray-450 uppercase tracking-wide block">Afastamentos / Deduções</span>
-                  <strong className="text-sm text-red-600 block font-mono font-bold">{formatarTempo(sim.diasAfastamento)}</strong>
-                  <span className="text-[11px] text-gray-500 block">Soma de dias desconsiderados da contagem geral devido a interrupções de vínculo ou licenças sem contribuição.</span>
+                  <strong className="text-sm text-red-600 block font-mono font-bold">{formatarTempo(certDeducoesDias)}</strong>
+                  <span className="text-[11px] text-gray-500 block">Soma de dias desconsiderados da contagem geral por afastamentos ou penalidades.</span>
                 </div>
               ) : null}
               <div className="bg-white p-4 rounded-lg border border-slate-200 space-y-1 sm:col-span-2 lg:col-span-3 xl:col-span-1">
                 <span className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wide block">Tempo Total Atual de Contribuição</span>
                 <strong className="text-sm text-[#004b8d] block font-mono font-bold">
-                  {formatarTempo(Math.max(0, tempoAtualTotalContribDias))}
+                  {formatarTempo(certTotalContribDias)}
                 </strong>
-                <span className="text-[11px] text-gray-500 block">Saldo líquido final computado na data de emissão/hoje (CMC + Averbados - Deduções).</span>
+                <span className="text-[11px] text-gray-500 block">Saldo líquido na certidão (Em 31/12/2021: {resumoCertidaoAtual.regrasTransitorias.tempoEm31Dez2021Anos} anos / {resumoCertidaoAtual.marcos.diasAte31Dez2021.toLocaleString('pt-BR')} dias).</span>
               </div>
             </div>
           </div>
@@ -3838,30 +4031,34 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
               </div>
             </div>
 
-            {/* Resumo da Grade de Tempo Apurada (Tempo Atual na Data de Emissão) */}
+            {/* Resumo da Grade de Tempo Apurada (Idêntico à Certidão Emitida) */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
                 <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Tempo Estatutário CMC (Data Atual)</span>
                 <strong className="text-sm text-gray-900 block font-mono">
-                  {formatarTempo(Math.max(0, tempoAtualCmcDias))}
+                  {formatarTempo(certCmcDias)}
                 </strong>
-                <span className="text-[10px] text-gray-500 block">Tempo apurado até a data de emissão ({new Date().toLocaleDateString('pt-BR')})</span>
+                <span className="text-[10px] text-gray-500 block">Apurado até a data de emissão ({resumoCertidaoAtual.dataCertidao})</span>
               </div>
 
               <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
-                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Tempo Público Averbado (SP)</span>
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wide block">Averbados & Incorporações (SP/INSS/Lic.)</span>
                 <strong className="text-sm text-gray-900 block font-mono">
-                  {formatarTempo(calculatedDiasSP)}
+                  {formatarTempo(certAverbadosPublicosDias + certAverbadosInssDias)}
                 </strong>
-                <span className="text-[10px] text-gray-500 block">Tempo CLT / averbações públicas</span>
+                <span className="text-[10px] text-gray-500 block">
+                  Público/CLT/Lic.: {certAverbadosPublicosDias.toLocaleString('pt-BR')}d • INSS: {certAverbadosInssDias.toLocaleString('pt-BR')}d
+                </span>
               </div>
 
               <div className="bg-white p-3.5 rounded-xl border border-blue-150 shadow-2xs space-y-1">
                 <span className="text-[10px] font-bold text-[#004b8d] uppercase tracking-wide block">Tempo Total Atual de Contribuição</span>
                 <strong className="text-sm text-[#004b8d] block font-mono font-bold">
-                  {formatarTempo(Math.max(0, tempoAtualTotalContribDias))}
+                  {formatarTempo(certTotalContribDias)}
                 </strong>
-                <span className="text-[10px] text-gray-500 block">CMC + Averbados - Deduções (hoje)</span>
+                <span className="text-[10px] text-gray-500 block">
+                  Em 31/12/2021: {resumoCertidaoAtual.regrasTransitorias.tempoEm31Dez2021Anos} anos ({resumoCertidaoAtual.marcos.diasAte31Dez2021.toLocaleString('pt-BR')} dias)
+                </span>
               </div>
             </div>
 
@@ -3895,8 +4092,8 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
 
                   <div className="divide-y divide-gray-150 text-xs">
                     {emitidasServidor.map(doc => (
-                      <div key={doc.id} className="py-2 flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
+                      <div key={doc.id} className="py-2 flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
                           {doc.tipo === 'oficial' ? (
                             <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-blue-100 text-blue-900 border border-blue-200 font-mono">
                               Oficial nº {doc.numeroCertidao}
@@ -3908,23 +4105,34 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
                           )}
                           <span className="text-gray-600 font-medium">
                             {doc.tempoFormatado} • Emissão: {new Date(doc.dataEmissaoTimestamp).toLocaleDateString('pt-BR')}
+                            {doc.ultimaEdicaoTimestamp ? ' (Editada)' : ''}
                           </span>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            try {
-                              gerarCertidaoAposentadoriaPadraoPDF(doc.snapshot);
-                              showNotification(`Certidão (${doc.numeroCertidao}) baixada novamente!`);
-                            } catch (e) {
-                              alert('Erro ao gerar PDF');
-                            }
-                          }}
-                          className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
-                        >
-                          <Download size={11} /> Baixar Novamente
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleAbrirEdicaoHistCert(doc)}
+                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Editar dados da certidão sem alterar a contagem"
+                          >
+                            <Pencil size={11} /> Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              try {
+                                gerarCertidaoAposentadoriaPadraoPDF(doc.snapshot);
+                                showNotification(`Certidão (${doc.numeroCertidao}) baixada novamente!`);
+                              } catch (e) {
+                                showNotification('Erro ao gerar o PDF da certidão.');
+                              }
+                            }}
+                            className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                          >
+                            <Download size={11} /> Baixar Novamente
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -3982,12 +4190,12 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
             <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl space-y-1 text-xs">
               <span className="font-bold text-blue-900 block">Servidor Selecionado:</span>
               <strong className="text-gray-900 block">{sim.nome || 'Servidor Municipal'} (Matrícula: {sim.matricula || '-'})</strong>
-              <span className="text-gray-600 block">Cargo: {(sim.cargo || sim.selectedCareer).replace(/_/g, ' ')}</span>
+              <span className="text-gray-600 block">Cargo: {getCareerDisplayName(sim.cargo || sim.selectedCareer)}</span>
             </div>
 
             <div className="space-y-1.5">
               <label className="block text-xs font-bold text-gray-700">
-                Número Sequencial da Certidão
+                Número Sequencial da Certidão de Aposentadoria
               </label>
               <input
                 type="text"
@@ -4046,18 +4254,18 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
             <div className="bg-purple-50 border border-purple-200 p-3 rounded-xl space-y-1 text-xs">
               <span className="font-bold text-purple-900 block">Servidor Selecionado:</span>
               <strong className="text-gray-900 block">{sim.nome || 'Servidor Municipal'} (Matrícula: {sim.matricula || '-'})</strong>
-              <span className="text-gray-600 block">Cargo: {(sim.cargo || sim.selectedCareer).replace(/_/g, ' ')}</span>
+              <span className="text-gray-600 block">Cargo: {getCareerDisplayName(sim.cargo || sim.selectedCareer)}</span>
             </div>
 
             <div className="space-y-1.5">
               <label className="block text-xs font-bold text-gray-700">
-                Número Sequencial da Certidão
+                Número Sequencial da Certidão de Abono de Permanência
               </label>
               <input
                 type="text"
                 value={numeroOficialInput}
                 onChange={(e) => setNumeroOficialInput(e.target.value)}
-                placeholder="Ex: 04/2026"
+                placeholder="Ex: 01/2026"
                 className="w-full text-xs p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 font-mono font-bold text-[#581c87]"
               />
             </div>
@@ -4130,6 +4338,13 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
                     <div className="flex items-center gap-2 self-end sm:self-auto">
                       <button
                         type="button"
+                        onClick={() => handleAbrirEdicaoHistCert(item)}
+                        className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Pencil size={13} /> Editar
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => {
                           try {
                             gerarCertidaoAposentadoriaPadraoPDF(item.snapshot);
@@ -4187,6 +4402,159 @@ export function StepGerar({ sim, initialShowReport = false }: { sim: UnifiedSimu
                 className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-bold cursor-pointer"
               >
                 Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE EDIÇÃO POSTERIOR DE CERTIDÃO EMITIDA (SEM ALTERAR CONTAGEM SEQUENCIAL) */}
+      {editingHistCert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-gray-200 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-gray-150 pb-3">
+              <div className="flex items-center gap-2 text-[#002f5a]">
+                <Pencil size={18} className="text-amber-600" />
+                <div>
+                  <h3 className="font-extrabold text-sm uppercase">Editar Certidão Emitida</h3>
+                  <p className="text-[11px] text-gray-500">
+                    Atualiza o registro sem alterar a numeração sequencial do sistema
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingHistCert(null)}
+                className="text-gray-400 hover:text-gray-600 cursor-pointer p-1"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Nº da Certidão</label>
+                <input
+                  type="text"
+                  value={editCertForm.numeroCertidao}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, numeroCertidao: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg font-mono font-bold text-[#004b8d]"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Data da Certidão</label>
+                <input
+                  type="text"
+                  value={editCertForm.dataCertidao}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, dataCertidao: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg"
+                  placeholder="DD/MM/AAAA"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block font-bold text-gray-700 mb-1">Cargo</label>
+                <input
+                  type="text"
+                  value={editCertForm.cargo}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, cargo: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Padrão</label>
+                <input
+                  type="text"
+                  value={editCertForm.padrao}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, padrao: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Referência</label>
+                <input
+                  type="text"
+                  value={editCertForm.referencia}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, referencia: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">ATS (%)</label>
+                <input
+                  type="number"
+                  value={editCertForm.atsPercentual}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, atsPercentual: Number(e.target.value) }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Data Abono (se aplicável)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={editCertForm.recebeAbono}
+                    onChange={(e) => setEditCertForm(prev => ({ ...prev, recebeAbono: e.target.checked }))}
+                  />
+                  <input
+                    type="text"
+                    value={editCertForm.dataAbono}
+                    disabled={!editCertForm.recebeAbono}
+                    onChange={(e) => setEditCertForm(prev => ({ ...prev, dataAbono: e.target.value }))}
+                    placeholder="DD/MM/AAAA"
+                    className="w-full p-2 border border-gray-300 rounded-lg disabled:bg-gray-100"
+                  />
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block font-bold text-gray-700 mb-1">Registro TCE-PR</label>
+                <input
+                  type="text"
+                  value={editCertForm.registroTribunalContas}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, registroTribunalContas: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Responsável pela Lavratura</label>
+                <input
+                  type="text"
+                  value={editCertForm.lavraturaNome}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, lavraturaNome: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Matrícula Responsável</label>
+                <input
+                  type="text"
+                  value={editCertForm.lavraturaMatricula}
+                  onChange={(e) => setEditCertForm(prev => ({ ...prev, lavraturaMatricula: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-lg font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-gray-150">
+              <button
+                type="button"
+                onClick={() => setEditingHistCert(null)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSalvarEdicaoHistCert(false)}
+                className="px-4 py-2 bg-[#004b8d] hover:bg-[#003a6d] text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1.5"
+              >
+                <Save size={13} /> Salvar Alterações
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSalvarEdicaoHistCert(true)}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1.5"
+              >
+                <Download size={13} /> Salvar & Baixar PDF
               </button>
             </div>
           </div>

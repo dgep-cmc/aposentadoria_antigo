@@ -39,6 +39,7 @@ export interface UnifiedSimulation {
     dataInicio?: string;
     dataFim?: string;
     useDates?: boolean;
+    periodoDescricao?: string;
   }[];
   
   // Tempos
